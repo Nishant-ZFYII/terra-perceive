@@ -1,7 +1,7 @@
 title: "Terra Perceive"
 description: "Building a production-grade C++ perception pipeline for construction site autonomy — sector RANSAC, BEV traversability, and kinematic safety from scratch on RELLIS-3D LiDAR data."
 author: "Nishant Pushparaju"
-baseurl: "/terra-perceive/blog"
+baseurl: "/terra-perceive"
 url: "https://nishant-zfyii.github.io"
 
 theme: minima
@@ -18,8 +18,8 @@ plugins:
 
 nav:
   - title: "Home"
-    url: /terra-perceive/blog/
+    url: /terra-perceive/
   - title: "M1: LiDAR Loading"
-    url: /terra-perceive/blog/m1-data
+    url: /terra-perceive/m1-data
   - title: "M2: RANSAC"
-    url: /terra-perceive/blog/m2-ransac
+    url: /terra-perceive/m2-ransac
