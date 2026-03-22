@@ -1,0 +1,28 @@
+name: terra-perceive
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - numpy
+  - opencv
+  - cmake
+  - eigen
+  - pip
+  - pip:
+      - ultralytics
+      - transformers
+      - streamlit
+      - protobuf
+      - grpcio
+      - grpcio-tools
+      - nats-py
+      - pytest
+      - flake8
+      - black
+      - pre-commit
+      - open3d
+      - torch
+      - torchvision
+      - onnx
+      - onnxruntime

@@ -1,0 +1,49 @@
+name: C++ Build & Test
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'ros2_nodes/**'
+      - 'tests/cpp/**'
+      - 'CMakeLists.txt'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'ros2_nodes/**'
+      - 'tests/cpp/**'
+      - 'CMakeLists.txt'
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-22.04
+    container:
+      image: ros:humble-ros-base
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y \
+            libeigen3-dev \
+            ros-humble-nav2-costmap-2d \
+            ros-humble-tf2-ros \
+            ros-humble-ament-cmake-gtest
+          rm -rf /var/lib/apt/lists/*
+
+      - name: Build
+        run: |
+          source /opt/ros/humble/setup.bash
+          colcon build --event-handlers console_direct+
+
+      - name: Test
+        run: |
+          source /opt/ros/humble/setup.bash
+          source install/setup.bash
+          colcon test --event-handlers console_direct+
+          colcon test-result --verbose

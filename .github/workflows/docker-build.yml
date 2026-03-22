@@ -1,0 +1,30 @@
+name: Docker Build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docker/**'
+      - 'Dockerfile*'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docker/**'
+      - 'Dockerfile*'
+
+jobs:
+  build-images:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        dockerfile:
+          - docker/Dockerfile.perception
+          - docker/Dockerfile.ml
+          - docker/Dockerfile.dashboard
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          IMAGE_NAME=$(echo "${{ matrix.dockerfile }}" | sed 's|docker/Dockerfile.||')
+          docker build -f ${{ matrix.dockerfile }} -t terra-perceive-${IMAGE_NAME}:ci .

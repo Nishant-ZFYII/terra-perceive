@@ -1,0 +1,27 @@
+// telemetry.proto — Protobuf schemas for telemetry and metrics.
+// NATS subjects: telemetry.metrics, telemetry.events
+
+syntax = "proto3";
+package terra_perceive;
+
+message LatencyMetrics {
+    double timestamp = 1;
+    string module = 2;
+    float p50_ms = 3;
+    float p95_ms = 4;
+    float p99_ms = 5;
+    float drop_rate = 6;
+    float hz_actual = 7;
+}
+
+message SessionReport {
+    double start_time = 1;
+    double end_time = 2;
+    uint32 total_frames = 3;
+    uint32 total_detections = 4;
+    uint32 total_safety_stops = 5;
+    uint32 total_safety_slows = 6;
+    float uptime_percent = 7;
+    float area_covered_m2 = 8;
+    repeated LatencyMetrics module_metrics = 9;
+}

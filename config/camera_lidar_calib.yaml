@@ -1,0 +1,21 @@
+# camera_lidar_calib.yaml — Extrinsic + intrinsic calibration matrices.
+# Source: RELLIS-3D calibration/ directory
+# Reference: github.com/unmannedlab/RELLIS-3D
+#
+# TODO: Replace with actual RELLIS-3D calibration values after cloning the dataset repo.
+
+camera_intrinsics:
+  fx: 607.0
+  fy: 607.0
+  cx: 636.0
+  cy: 360.0
+  width: 1280
+  height: 720
+
+# T_cam_lidar: 4x4 transformation matrix (LiDAR -> Camera frame)
+# Row-major order
+extrinsic_T_cam_lidar:
+  - [1.0, 0.0, 0.0, 0.0]
+  - [0.0, 1.0, 0.0, 0.0]
+  - [0.0, 0.0, 1.0, 0.0]
+  - [0.0, 0.0, 0.0, 1.0]

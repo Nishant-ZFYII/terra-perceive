@@ -1,0 +1,86 @@
+# === C++ ===
+build/
+install/
+log/
+*.o
+*.so
+*.a
+*.d
+*.dSYM/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile.cmake
+compile_commands.json
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+*.egg
+.eggs/
+*.whl
+venv/
+.venv/
+
+# === Conda ===
+*.conda
+*.tar.bz2
+
+# === ROS2 / colcon ===
+build/
+install/
+log/
+
+# === Docker ===
+*.log
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cursor/
+
+# === Data (large files — do not commit) ===
+data/
+*.bin
+*.pcd
+*.bag
+*.db3
+*.onnx
+*.engine
+*.pt
+*.pth
+weights/
+checkpoints/
+
+# === Third-party reference repos ===
+third_party/
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === Personal learning notes (not for commit) ===
+learning.tex
+terra_perceive_phases_5bab88c8.plan.md
+learning/
+notes/
+
+# === Internal workflow files (not for public repo) ===
+CLAUDE.md
+.clineignore
+activeContext.md
+projectBrief.md
+decisions.md
+logs/
+
+# === Secrets ===
+.env
+*.key
+*.pem
+condaenv.*.requirements.txt

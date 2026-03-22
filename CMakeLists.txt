@@ -1,0 +1,131 @@
+cmake_minimum_required(VERSION 3.16)
+project(construction_perception VERSION 0.1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
+find_package(nav2_costmap_2d REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(Eigen3 REQUIRED)
+
+include_directories(
+    include
+    ${EIGEN3_INCLUDE_DIRS}
+)
+
+# --- Phase 1: Core perception libraries (from scratch, Eigen only) ---
+
+add_library(ransac_ground_seg src/ransac_ground_seg.cpp)
+target_link_libraries(ransac_ground_seg Eigen3::Eigen)
+
+add_library(traversability src/traversability.cpp)
+target_link_libraries(traversability Eigen3::Eigen)
+
+add_library(cam_lidar_projection src/cam_lidar_projection.cpp)
+target_link_libraries(cam_lidar_projection Eigen3::Eigen)
+
+add_library(safety_supervisor src/safety_supervisor.cpp)
+target_link_libraries(safety_supervisor Eigen3::Eigen)
+
+add_library(point_cloud_loader src/point_cloud_loader.cpp)
+target_link_libraries(point_cloud_loader Eigen3::Eigen)
+
+# --- Phase 2: Tracking libraries (stubs for now) ---
+
+add_library(kalman_filter src/kalman_filter.cpp)
+target_link_libraries(kalman_filter Eigen3::Eigen)
+
+add_library(hungarian src/hungarian.cpp)
+target_link_libraries(hungarian Eigen3::Eigen)
+
+add_library(sort_tracker src/sort_tracker.cpp)
+target_link_libraries(sort_tracker kalman_filter hungarian Eigen3::Eigen)
+
+option(BUILD_ROS2_NODES "Build ROS2 nodes" OFF)   
+# --- ROS2 nodes (wrappers around core libs) ---
+if(BUILD_ROS2_NODES)
+    add_executable(ground_seg_node ros2_nodes/ground_seg_node.cpp)
+    ament_target_dependencies(ground_seg_node rclcpp sensor_msgs)
+    target_link_libraries(ground_seg_node ransac_ground_seg)
+
+    add_executable(traversability_node ros2_nodes/traversability_node.cpp)
+    ament_target_dependencies(traversability_node rclcpp sensor_msgs nav_msgs)
+    target_link_libraries(traversability_node traversability ransac_ground_seg)
+
+    add_executable(projection_node ros2_nodes/projection_node.cpp)
+    ament_target_dependencies(projection_node rclcpp sensor_msgs)
+    target_link_libraries(projection_node cam_lidar_projection)
+
+    add_executable(tracker_node ros2_nodes/tracker_node.cpp)
+    ament_target_dependencies(tracker_node rclcpp visualization_msgs geometry_msgs)
+    target_link_libraries(tracker_node sort_tracker)
+
+    add_executable(safety_node ros2_nodes/safety_node.cpp)
+    ament_target_dependencies(safety_node rclcpp geometry_msgs visualization_msgs nav_msgs)
+    target_link_libraries(safety_node safety_supervisor)
+
+    # --- Phase 3: Costmap layer plugin ---
+
+    add_library(traversability_costmap_layer SHARED ros2_nodes/traversability_costmap_layer.cpp)
+    ament_target_dependencies(traversability_costmap_layer rclcpp nav2_costmap_2d nav_msgs)
+endif()
+# --- Tests ---
+
+if(BUILD_TESTING)
+    find_package(ament_cmake_gtest REQUIRED)
+
+    # Phase 1 tests
+    ament_add_gtest(test_ransac tests/cpp/test_ransac.cpp)
+    target_link_libraries(test_ransac ransac_ground_seg)
+
+    ament_add_gtest(test_traversability tests/cpp/test_traversability.cpp)
+    target_link_libraries(test_traversability traversability)
+
+    ament_add_gtest(test_projection tests/cpp/test_projection.cpp)
+    target_link_libraries(test_projection cam_lidar_projection)
+
+    ament_add_gtest(test_safety tests/cpp/test_safety.cpp)
+    target_link_libraries(test_safety safety_supervisor)
+
+    # Phase 2 tests
+    ament_add_gtest(test_kalman tests/cpp/test_kalman.cpp)
+    target_link_libraries(test_kalman kalman_filter)
+
+    ament_add_gtest(test_hungarian tests/cpp/test_hungarian.cpp)
+    target_link_libraries(test_hungarian hungarian)
+
+    ament_add_gtest(test_loader tests/cpp/test_loader.cpp WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})  
+    target_link_libraries(test_loader point_cloud_loader)
+endif()
+
+if(BUILD_ROS2_NODES)
+    # --- Install ---
+
+    install(TARGETS
+        ground_seg_node
+        traversability_node
+        projection_node
+        tracker_node
+        safety_node
+        DESTINATION lib/${PROJECT_NAME}
+    )
+
+    install(TARGETS traversability_costmap_layer
+        ARCHIVE DESTINATION lib
+        LIBRARY DESTINATION lib
+        RUNTIME DESTINATION bin
+    )
+
+endif()
+
+install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)
+install(DIRECTORY config/ DESTINATION share/${PROJECT_NAME}/config)
+
+ament_package()

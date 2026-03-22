@@ -1,0 +1,26 @@
+// safety.proto — Protobuf schemas for safety supervisor messages.
+// NATS subjects: safety.cmd_vel.safe, safety.events
+
+syntax = "proto3";
+package terra_perceive;
+
+message SafeVelocity {
+    double timestamp = 1;
+    float linear_x = 2;
+    float angular_z = 3;
+    string active_rule = 4;
+    string reason = 5;
+}
+
+message SafetyEvent {
+    double timestamp = 1;
+    string rule = 2;
+    float trigger_value = 3;
+    float vel_before = 4;
+    float vel_after = 5;
+    string details = 6;
+}
+
+message SafetyEventLog {
+    repeated SafetyEvent events = 1;
+}

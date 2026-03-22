@@ -1,0 +1,72 @@
+# pipeline_config.yaml — Central configuration for perception pipeline.
+# All tunable parameters in one place. No magic numbers in code.
+# Phase 1: sector RANSAC, vehicle-aware traversability, kinematic safety.
+
+# --- Vehicle kinematics (drum roller / heavy equipment) ---
+vehicle:
+  mass_kg: 30000.0           # 30-ton drum roller
+  max_speed_mps: 2.0         # max operating speed
+  max_climbable_grade_deg: 20.0
+  max_roughness_tolerance: 0.15   # meters RMS
+  max_step_height: 0.3       # meters
+
+# --- RANSAC ground segmentation ---
+ransac:
+  distance_threshold: 0.15   # meters — inlier/outlier boundary
+  max_iterations: 1000
+  confidence: 0.99
+  min_inliers: 100
+
+# --- Sector parameters (Phase 1 upgrade) ---
+sector:
+  sector_size_x: 5.0         # meters per sector
+  sector_size_y: 5.0
+  continuity_angle_thresh_deg: 30.0  # max normal disagreement between neighbors
+
+# --- Traversability grid ---
+traversability:
+  resolution: 0.5            # meters per cell
+  x_min: -5.0
+  x_max: 30.0
+  y_min: -15.0
+  y_max: 15.0
+  min_points_per_cell: 3
+
+# --- Kinematic safety supervisor ---
+safety:
+  # Stopping distance model
+  reaction_time_s: 0.2       # sensor-to-actuator latency
+  gravity: 9.81
+
+  # Friction model: mu = mu_base + mu_trav_scale * traversability_score
+  mu_base: 0.3               # worst-case friction (slippery mud)
+  mu_trav_scale: 0.5         # additional friction for good terrain
+
+  # TTC intervention thresholds
+  ttc_emergency_stop: 0.0    # TTC <= 0 -> e-stop
+  ttc_hard_brake: 2.0        # TTC < 2s -> hard brake (10% velocity)
+  ttc_proportional: 5.0      # TTC < 5s -> proportional scaling
+
+  # Sensor health
+  lidar_timeout_ms: 200.0
+  loop_rate_hz: 50
+  loop_warn_ms: 20.0
+
+# --- Camera-LiDAR projection ---
+# See config/camera_lidar_calib.yaml for extrinsic/intrinsic matrices
+
+# --- Semantic class to traversability modifier (for fusion) ---
+semantic_modifiers:
+  grass: 1.0
+  dirt: 0.9
+  gravel: 0.8
+  asphalt: 1.0
+  mud: 0.5
+  water: 0.1
+  tree: 0.0
+  bush: 0.3
+  fence: 0.0
+  building: 0.0
+  person: 0.0
+  vehicle: 0.0
+  unknown: 0.6

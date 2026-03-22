@@ -1,0 +1,56 @@
+// perception.proto — Protobuf schemas for perception messages.
+// PDF reference: Part 3 (Section 3.3 — Schema discipline)
+//
+// Every message includes: timestamp, frame_id, schema_version, source.
+// Use these for NATS subjects: perception.traversability.grid, perception.objects.*
+
+syntax = "proto3";
+package terra_perceive;
+
+message Header {
+    double timestamp = 1;
+    string frame_id = 2;
+    uint32 schema_version = 3;
+    string source = 4;
+}
+
+message BEVGrid {
+    Header header = 1;
+    float resolution = 2;
+    uint32 width = 3;
+    uint32 height = 4;
+    float origin_x = 5;
+    float origin_y = 6;
+    repeated float scores = 7;  // traversability [0, 1] per cell
+}
+
+message Detection2D {
+    float x_min = 1;
+    float y_min = 2;
+    float x_max = 3;
+    float y_max = 4;
+    int32 class_id = 5;
+    float confidence = 6;
+    float depth_3d = 7;  // median LiDAR depth within bbox
+}
+
+message DetectionList {
+    Header header = 1;
+    repeated Detection2D detections = 2;
+}
+
+message TrackedObject {
+    int32 track_id = 1;
+    int32 class_id = 2;
+    float x = 3;
+    float y = 4;
+    float vx = 5;
+    float vy = 6;
+    float z_3d = 7;
+    int32 hits = 8;
+}
+
+message TrackList {
+    Header header = 1;
+    repeated TrackedObject tracks = 2;
+}
