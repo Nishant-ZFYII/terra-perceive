@@ -1,43 +1,52 @@
 ---
 layout: home
-title: Terra Perceive
+title: Project Overview
 ---
-
-# Terra Perceive
 
 *A production-grade C++ perception pipeline for construction site autonomy.*
 
-Built from scratch using C++17, Eigen3, and ROS2 on the [RELLIS-3D](https://github.com/unmannedlab/RELLIS-3D) off-road LiDAR dataset.
-Targeting real deployment constraints: < 5ms per frame, runs on Jetson, ships via Docker.
+Autonomous perception often breaks when it leaves the asphalt. While highway datasets like KITTI are the industry standard, they don't capture the chaotic, deforming, and unstructured terrain of a construction site. This project, **Terra Perceive**, is an engineering deep-dive into building a perception stack from the ground up to handle the "unstructured frontier."
+
+Built using **C++17**, **Eigen3**, and **ROS2** on the **[RELLIS-3D](https://github.com/unmannedlab/RELLIS-3D)** dataset, this stack prioritizes mathematical rigor and real-time performance. Every core component—from sector-based RANSAC to kinematic safety filters—is implemented from scratch.
 
 ---
 
-## Why this project exists
+## Phase 1: Core Perception & Safety (Current Focus)
 
-Most autonomous perception demos work on highway driving datasets (KITTI, nuScenes). Construction sites are different — uneven terrain, steep grades, mud, standing water, and no lane markings. The algorithms that work on roads fail here.
+Phase 1 focuses on the primary perception-to-safety loop: taking raw LiDAR data and producing actionable safety interventions based on terrain geometry.
 
-This series documents building a perception stack that handles the hard cases: sloped ground, occluded obstacles, and safety decisions grounded in vehicle kinematics rather than fixed thresholds.
+| Milestone | Implementation | Status |
+|-----------|----------------|--------|
+| [M1: Data Ingestion](m1-data) | $O(N)$ binary loader for RELLIS-3D and Open3D visualization | Completed |
+| [M2: Sector RANSAC](m2-ransac) | Ground segmentation for sloped and graded terrain | In Progress |
+| M3: Traversability Grid | Risk/confidence maps using PCA surface normals | Pending |
+| M4: Camera-LiDAR Fusion | Homogeneous transforms and semantic segmentation (SegFormer) | Pending |
+| M5: Kinematic Safety | Time-to-Collision (TTC) and forward-arc lookahead | Pending |
+| M6: Integration | Docker-compose orchestration and smoke testing | Pending |
+
+## Phase 2: Tracking & Production Transport
+
+The second phase transitions the pipeline into a distributed system with persistent object awareness.
+
+- **NATS JetStream**: Production-grade messaging for safety audit replay and low-latency transport.
+- **Protobuf Schemas**: Standardized perception and telemetry messages.
+- **Multi-Object Tracking**: Kalman filters and the SORT algorithm for persistent worker/vehicle tracking.
+- **Probabilistic Scoring**: Uncertainty propagation through the traversability grid.
+
+## Phase 3: Deployment & Operations
+
+Final hardening and operational tools for fleet-scale management.
+
+- **Streamlit Ops Dashboard**: Real-time telemetry visualization.
+- **Nav2 Costmap Plugin**: Exporting custom traversability layers to the ROS2 navigation stack.
+- **TensorRT Optimization**: FP16 export for deployment on NVIDIA Jetson Orin.
 
 ---
 
-## Milestones
-
-| # | Topic | Status |
-|---|-------|--------|
-| [M1: Taming Raw LiDAR Data](m1-data) | Loading RELLIS-3D `.bin` files in C++, Open3D visualization | ✅ Done |
-| [M2: Sector RANSAC](m2-ransac) | Ground segmentation on sloped terrain | 🔧 In progress |
-| M3: BEV Traversability Grid | Risk + confidence layers, vehicle-aware scoring | ⏳ Pending |
-| M4: Camera-LiDAR Fusion | Projecting LiDAR onto image, SegFormer integration | ⏳ Pending |
-| M5: Kinematic Safety Supervisor | Stopping distance, TTC, forward-arc lookahead | ⏳ Pending |
-
----
-
-## Stack
-
-- **Language**: C++17, Eigen3 (no OpenCV for core algorithms)
-- **Build**: colcon / CMake, ROS2 Humble
-- **Data**: RELLIS-3D (Ouster OS1-64, off-road terrain)
-- **Visualization**: Open3D, Python
+**Technical Stack**
+- **Core Logic**: C++17, Eigen3 (No high-level CV libraries for math)
+- **Infrastructure**: ROS2 Humble, Colcon, CMake
+- **Data Source**: RELLIS-3D (Ouster OS1-64)
 - **Deployment**: Docker, Ubuntu 22.04
 
 ---
