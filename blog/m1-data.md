@@ -1,3 +1,9 @@
+---
+layout: post
+title: "M1: Taming Raw LiDAR Data (RELLIS-3D)"
+date: 2026-03-21
+---
+
 # Milestone 1: Taming Raw LiDAR Data (RELLIS-3D)
 
 *Part of the Terra Perceive series — building a perception pipeline for construction site autonomy.*
