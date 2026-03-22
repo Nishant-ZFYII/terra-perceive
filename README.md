@@ -2,90 +2,59 @@
 
 **LiDAR + Camera Fusion | C++ Algorithms from Scratch | ROS2 Nav2 Pipeline**
 
+[Live Project & Documentation](https://nishant-zfyii.github.io/terra-perceive/)
+
 Nishant Pushparaju | NYU MS Mechatronics & Robotics | March 2026
 
 ---
 
-## What This Is
+## Overview
 
-A complete, Dockerized autonomy perception pipeline that takes raw LiDAR + camera data from off-road terrain, computes traversability, detects and tracks workers, feeds into ROS2/Nav2 for path planning, and enforces safety constraints.
+Terra Perceive is a modular autonomy perception pipeline designed for the unstructured, deforming terrain of construction sites. The stack processes raw LiDAR and camera data from the **[RELLIS-3D Dataset](https://github.com/unmannedlab/RELLIS-3D)** to compute physics-grounded traversability, track dynamic obstacles, and enforce kinematic safety constraints.
 
-Core perception algorithms are written **from scratch in C++ with Eigen**. ML inference (YOLO, SegFormer) uses production libraries.
+The core perception algorithms are implemented **from scratch in C++ with Eigen**, prioritizing mathematical correctness, numerical stability, and real-time performance.
 
-## Architecture
+## System Architecture
 
+```mermaid
+graph TD
+    A[LiDAR PC2] --> B[Ground Segmentation]
+    A --> C[Traversability Grid]
+    D[Camera RGB] --> E[YOLO/SegFormer]
+    B --> C
+    E --> F[Cam-LiDAR Fusion]
+    C --> F
+    F --> G[Nav2 Costmap Layer]
+    G --> H[MPPI Controller]
+    H --> I[Safety Supervisor]
+    I --> J[Safe cmd_vel]
 ```
-Camera (RGB) -> [YOLO Detection] -> [SORT Tracker (C++)] -> /tracked_objects
-             -> [SegFormer]      -> /semantic_img
-                                          |
-LiDAR (PC2)  -> [Ground RANSAC (C++)] -> [Traversability (C++)]
-                                          |
-              [Cam-LiDAR Projection (C++)] -> [Fused Traversability]
-                                                      |
-                                    Traversability Costmap Layer (C++)
-                                       Dynamic Obstacle Layer
-                                        Nav2 Local Costmap
-                                              |
-              Odom / TF  ---------> MPPI Controller (Nav2)
-                                              |
-                                    Safety Supervisor (C++)
-                                              |
-                                     /cmd_vel_safe -> Robot
-```
+
+## Core C++ Implementations
+
+The following components were built from first principles to ensure a deep understanding of the underlying mathematics and to optimize for off-road environments.
+
+| Component | Technical Detail | Key Algorithm |
+|-----------|------------------|---------------|
+| **Ground Segmentation** | Handling sloped/graded terrain | Sector-based RANSAC + SVD Refinement |
+| **Traversability** | Two-layer risk/confidence grid | PCA Surface Normals + Kinematic Scoring |
+| **Sensor Fusion** | Rigid body transformations | SE(3) Homogeneous Transforms |
+| **State Estimation** | Multi-object tracking | Kalman Filter (Constant Velocity) |
+| **Data Association** | Optimal track assignment | Hungarian Algorithm / SORT |
+| **Safety Layer** | Kinematic-aware lookahead | Forward-Arc Time-to-Collision (TTC) |
 
 ## Quick Start
 
 ```bash
-# 1. Create environment
-conda env create -f environment.yml
-conda activate terra-perceive
+# 1. Initialize environment
+conda env create -f environment.yml && conda activate terra-perceive
 
-# 2. Source ROS2
-source /opt/ros/humble/setup.bash
-
-# 3. Build
+# 2. Build from source
 make build
 
-# 4. Test
-make test
-
-# 5. Docker (full stack)
-make docker-up
+# 3. Execute Smoke Test (Dockerized)
+docker-compose up perception
 ```
-
-## Repository Structure
-
-```
-include/          C++ headers (algorithm interfaces)
-src/              C++ implementations (from scratch)
-ros2_nodes/       ROS2 wrappers
-python/           ML inference nodes
-transport/        NATS/gRPC production transport layer
-  proto/          Protobuf message schemas
-dashboard/        Streamlit ops dashboard
-config/           All tunable parameters
-docker/           Dockerfiles + compose
-tests/            C++ (gtest) + Python (pytest)
-launch/           ROS2 launch files
-scripts/          Utility scripts
-logs/             Development log
-```
-
-## From-Scratch Implementations (C++)
-
-| Component | Lines | Key Algorithm |
-|-----------|-------|---------------|
-| Ground RANSAC | - | Plane fitting + SVD refinement |
-| Traversability Grid | - | PCA surface normals + scoring |
-| Cam-LiDAR Projection | - | SE(3) transforms + pinhole model |
-| Kalman Filter | - | Constant-velocity state estimation |
-| Hungarian Algorithm | - | Optimal assignment O(n^3) |
-| SORT Tracker | - | Multi-object tracking |
-| Safety Supervisor | - | Priority-ordered cmd_vel filter |
-
-## Philosophy
-
-Use AI tools for code review, not code generation. Understand every line. The resources in the spec point to primary sources so you learn the algorithms, not just the APIs.
 
 ## License
 
