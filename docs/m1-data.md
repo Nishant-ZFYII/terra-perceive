@@ -20,14 +20,14 @@ This milestone focuses on the development of a high-performance C++ loader capab
 
 The RELLIS-3D data is stored in the KITTI-style binary format. Each point is represented by four `float32` values packed contiguously in memory: `[x, y, z, intensity]`.
 
-1. **Storage**: Each point occupies 16 bytes (4 floats $\times$ 4 bytes).
+1. **Storage**: Each point occupies 16 bytes \( (4 \text{ floats} \times 4 \text{ bytes}) \).
 2. **Coordinate System**: We operate in the standard ROS-style Right-Handed System where **X** is Forward, **Y** is Left, and **Z** is Up.
 
 ---
 
-## Technical Implementation: $O(N)$ Ingestion
+## Technical Implementation: \( O(N) \) Ingestion
 
-The goal of the loader is to achieve single-pass, $O(N)$ efficiency with minimal memory overhead. I implemented this in `src/point_cloud_loader.cpp` and `include/point_cloud_loader.hpp`.
+The goal of the loader is to achieve single-pass, \( O(N) \) efficiency with minimal memory overhead. I implemented this in `src/point_cloud_loader.cpp` and `include/point_cloud_loader.hpp`.
 
 ### Memory Efficiency & Pre-allocation
 
