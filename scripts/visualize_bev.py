@@ -180,6 +180,7 @@ def plot_3d_bev(mean_z, risk, out_path, title_suffix=""):
                     facecolors=cmap(risk),
                     rstride=1, cstride=1, linewidth=0, antialiased=False)
     ax.scatter([0], [0], [0], c="blue", s=120, marker="^", zorder=5)
+    ax.view_init(elev=35, azim=-60)   # look from above-left: X forward, Y lateral visible
     ax.set_xlabel("X — forward (m)")
     ax.set_ylabel("Y — lateral (m)")
     ax.set_zlabel("Z — elevation (m)")
