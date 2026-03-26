@@ -170,20 +170,17 @@ The blue triangle marks the vehicle position at the origin.
 ![BEV 6-Panel Feature Map](assets/bev_6panel.png)
 *Figure 2: Per-cell feature heatmaps. Elevation (terrain colormap), risk (RdYlGn reversed), slope in degrees, roughness (eigenvalue ratio), step height, and confidence. Low-confidence cells show at 0 for all features.*
 
-![BEV 3D Surface](assets/bev_3d.png)
-*Figure 3: 3D surface visualization colored by risk. Elevation (Z) reflects the per-cell mean height; color follows risk (green = safe, red = hazard).*
-
 ### Animated BEV — 100 RELLIS-3D Frames
 
 ![BEV Animation](assets/bev_animation.gif)
-*Figure 4: Animated 2D BEV grid over 100 consecutive LiDAR scans from a RELLIS-3D sequence. Each frame is independently processed through the full pipeline: bag extraction → RANSAC ground segmentation → traversability grid. The gray (unknown) region shifts as the sensor moves; hazard patches appear consistently on rough or sloped terrain patches.*
+*Figure 3: Animated 2D BEV grid over 100 consecutive LiDAR scans from a RELLIS-3D sequence. Each frame is independently processed through the full pipeline: bag extraction → RANSAC ground segmentation → traversability grid. The gray (unknown) region shifts as the sensor moves; hazard patches appear consistently on rough or sloped terrain patches.*
 
 ### Synthetic Validation
 
 To validate the pipeline independently of real data, we also tested with a synthetic grid containing two hazard patches on a safe background:
 
 ![Synthetic BEV](assets/bev_synthetic.png)
-*Figure 5: Synthetic traversability grid — two high-risk patches (red) with low-confidence border region (gray).*
+*Figure 4: Synthetic traversability grid — two high-risk patches (red) with low-confidence border region (gray).*
 
 ---
 
