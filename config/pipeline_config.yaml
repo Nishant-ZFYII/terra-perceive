@@ -2,13 +2,22 @@
 # All tunable parameters in one place. No magic numbers in code.
 # Phase 1: sector RANSAC, vehicle-aware traversability, kinematic safety.
 
+active_vehicle: warthog 
+
 # --- Vehicle kinematics (drum roller / heavy equipment) ---
-vehicle:
+vehicle_drum_roller:
   mass_kg: 30000.0           # 30-ton drum roller
   max_speed_mps: 2.0         # max operating speed
   max_climbable_grade_deg: 20.0
   max_roughness_tolerance: 0.15   # meters RMS
   max_step_height: 0.3       # meters
+
+vehicle_warthog: #https://clearpathrobotics.com/warthog-unmanned-ground-vehicle-robot/
+  mass_kg: 590.0            # Warthog weight
+  max_speed_mps: 5.0         # max operating speed
+  max_climbable_grade_deg: 30.0 #estimated, not on datasheet
+  max_roughness_tolerance: 0.275    # meters RMS
+  max_step_height: 0.2       # meters
 
 # --- RANSAC ground segmentation ---
 ransac:
