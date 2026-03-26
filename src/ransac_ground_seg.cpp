@@ -59,7 +59,7 @@ SegmentationResult segment_ground(const std::vector<Eigen::Vector3f>& cloud,
 
         //plane fitting; n = (p2-p1).cross(p3-p1),
         Eigen::Vector3f normal = (p2 - p1).cross(p3 - p1);
-        
+        if (normal.z() < 0) normal = -normal;  
         
         
         //degenerate check: if cross product norm < 1e-6, skip
