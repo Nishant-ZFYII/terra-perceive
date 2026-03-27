@@ -138,7 +138,10 @@ model = SegformerForSemanticSegmentation.from_pretrained(
 
 Xie et al. designed SegFormer with a hierarchical Transformer encoder using Mix-FFN blocks, producing multi-scale features at 1/4 the input resolution. The decoder is a lightweight MLP that fuses those scales directly — no positional encoding needed, which gives better generalisation across image resolutions than earlier ViT-based segmenters. Output logits have shape `(1, 150, H/4, W/4)`, bilinearly upsampled back to `(H, W)`, then argmax over the class dimension.
 
-The reason to use a pre-trained ADE20K model rather than fine-tuning on RELLIS-3D: the 20 RELLIS-3D terrain classes have different IDs than ADE20K's 150 classes, so fine-tuning requires a remapping step and GPU time. For Phase 1, zero-shot ADE20K predictions are sufficient — the model correctly identifies water, trees, grass, earth, and people in the RELLIS-3D example frame:
+The reason to use a pre-trained ADE20K model rather than fine-tuning on RELLIS-3D: the 20 RELLIS-3D terrain classes have different IDs than ADE20K's 150 classes, so fine-tuning requires a label remapping step and GPU time that is out of scope here. Zero-shot ADE20K predictions are sufficient for this stage — the model correctly identifies water, trees, grass, earth, and people without any dataset-specific training:
+
+![SegFormer output](assets/segformer_output.png)
+*Left: original RELLIS-3D camera frame. Right: SegFormer-B0 ADE20K predictions. Blue = sky (class 2), orange = earth/dirt (class 13), red = water/mud (class 21), light orange = person (class 12), green = plant/bush (class 17). The model cleanly separates the mud puddle from dry terrain and isolates the person — both critical hazards the geometry pipeline cannot distinguish from safe ground.*
 
 *Modifier scale: **1.0 = fully traversable** (geometry score unchanged), **0.0 = lethal** (robot must stop regardless of geometry). Unknown classes default to 1.0 — no penalty if the model is uncertain.*
 
@@ -155,8 +158,6 @@ The reason to use a pre-trained ADE20K model rather than fine-tuning on RELLIS-3
 | 32 | fence | 0.0× — hard obstacle, lethal |
 | 60 | road | 1.0× — paved, safe |
 
-Fine-tuning on RELLIS-3D's 20 classes is a Phase 3 task — for now, the zero-shot ADE20K labels match the terrain types present in the dataset well enough.
-
 ---
 
 ## Fusion: Multiplying Geometry by Semantics
@@ -171,7 +172,7 @@ The multiplicative model has two properties I specifically wanted:
 1. **Lethal override**: a modifier of 0.0 zeroes the risk regardless of geometry — trees and people stop the robot even on flat terrain.
 2. **Conservative by default**: unknown or unseen classes get modifier 1.0. The geometry-only score is kept if the semantic model is uncertain. No false positives from missing labels.
 
-**A coordinate frame gotcha that took a full debug session to find.** The initial run showed 0 of 5,697 camera-visible LiDAR points landing in the BEV grid — the semantic modifier grid was all 1.0 (no effect). I added step-by-step diagnostics:
+**The initial run showed 0 of 5,697 camera-visible LiDAR points landing in the BEV grid.** The semantic modifier was all 1.0 across the board — no effect. I added step-by-step diagnostics:
 
 ```
 depth_ok:  42,598   (points in front of camera)
@@ -204,7 +205,7 @@ The fix: shift the BEV grid to $$x \in [-30, 5]$$. Same 70 cells, same 0.5 m res
 
 ## What I'd Do Differently
 
-- **Fine-tune SegFormer on RELLIS-3D classes.** The zero-shot ADE20K predictions work well for this example frame, but the class mapping is approximate. RELLIS-3D has 20 terrain-specific classes (mud, puddle, rubble, asphalt, etc.) that map onto ADE20K classes only loosely. Fine-tuning with the proper label mapping is a Phase 3 task but would meaningfully improve modifier accuracy.
+- **Fine-tune SegFormer on RELLIS-3D classes.** The zero-shot ADE20K predictions work well for this frame, but the class mapping is approximate. RELLIS-3D has 20 terrain-specific classes (mud, puddle, rubble, asphalt, etc.) that map onto ADE20K's 150 only loosely. A fine-tuned model with the proper label mapping would produce more accurate modifiers, particularly for the mud/water/earth boundary cases where ADE20K classes blur together.
 - **Accumulate frames before fusing.** A single scan projects ~5,700 points into the camera. Many BEV cells only get 1–2 point votes for their modal label, making the modal assignment noisy. Accumulating 5–10 frames (with ego-motion compensation) would give each cell a statistically stable label before fusion.
 - **Handle the ADE20K/RELLIS-3D resolution mismatch.** The calibration specifies 1853×1025; the SegFormer image processor resizes to a slightly different resolution internally. The label map dimensions and the projection bounds need to be kept in sync explicitly — a future hardening task.
 
@@ -217,3 +218,14 @@ The fused risk grid answers *"is this terrain traversable?"* The next milestone 
 ---
 
 *Code: `src/cam_lidar_projection.cpp`, `python/segmentation_node.py`, `scripts/compare_bev_fusion.py`, `config/camera_lidar_calib.yaml`*
+
+---
+
+## References
+
+1. Shree Nayar, *"First Principles of Computer Vision: Camera Calibration"*, Columbia University — pinhole model, intrinsic matrix K, perspective projection pipeline.
+2. James Diebel, *"Representing Attitude: Euler Angles, Unit Quaternions, and Rotation Vectors"*, 2006 — §6.4 Eq. 125, quaternion → rotation matrix. Note: Diebel's convention (active rotation) produces the transpose of the Wikipedia/scipy formula.
+3. Wikipedia, [Quaternions and spatial rotation — Conversion to and from the matrix representation](https://en.wikipedia.org/wiki/Quaternions_and_spatial_rotation#Conversion_to_and_from_the_matrix_representation) — Hamilton convention formula used in the implementation (scipy-compatible, produces $$R_{lidar \leftarrow cam}$$).
+4. Enze Xie et al., *"SegFormer: Simple and Efficient Design for Semantic Segmentation with Transformers"*, NeurIPS 2021 — hierarchical Transformer encoder with Mix-FFN blocks, lightweight MLP decoder.
+5. HuggingFace, [`nvidia/segformer-b0-finetuned-ade-512-512`](https://huggingface.co/nvidia/segformer-b0-finetuned-ade-512-512) — pre-trained SegFormer-B0 on ADE20K (150 classes) used for zero-shot semantic labelling.
+6. Peng Jiang et al., *"RELLIS-3D Dataset: Data, Benchmarks and Analysis"*, IEEE RA-L 2021 — source of extrinsic calibration (`transforms.yaml`), intrinsics (`camera_info.txt`), and example frames used throughout this milestone.
