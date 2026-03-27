@@ -20,7 +20,7 @@ Phase 1 focuses on the primary perception-to-safety loop: taking raw LiDAR data 
 | [M1: Data Ingestion](m1-data) | $O(N)$ binary loader for RELLIS-3D and Open3D visualization | Completed |
 | [M2: Sector RANSAC](m2-ransac) | Ground segmentation for sloped and graded terrain | Completed |
 | [M3: Traversability Grid](m3-traversability) | Risk/confidence maps using PCA surface normals | Completed |
-| M4: Camera-LiDAR Fusion | Homogeneous transforms and semantic segmentation (SegFormer) | Pending |
+| [M4: Camera-LiDAR Fusion](m4-fusion) | Homogeneous transforms and semantic segmentation (SegFormer) | Completed |
 | M5: Kinematic Safety | Time-to-Collision (TTC) and forward-arc lookahead | Pending |
 | M6: Integration | Docker-compose orchestration and smoke testing | Pending |
 
