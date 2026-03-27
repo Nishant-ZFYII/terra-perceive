@@ -23,3 +23,7 @@ nav:
     url: /terra-perceive/m1-data
   - title: "M2: RANSAC"
     url: /terra-perceive/m2-ransac
+  - title: "M3: Traversability"
+    url: /terra-perceive/m3-traversability
+  - title: "M4: Fusion"
+    url: /terra-perceive/m4-fusion
