@@ -1,10 +1,7 @@
 // cam_lidar_projection.hpp
 // Camera-LiDAR projection using extrinsic + intrinsic matrices — from scratch.
 //
-// PDF reference: Part 4 (pages 13-14)
-// Read: Hartley & Zisserman, "Multiple View Geometry", Chapter 6
-// Read: Blanco, "A Tutorial on SE(3) Transformation Parameterizations"
-// Watch: Shree Nayar, "Camera Calibration" (First Principles of CV, YouTube)
+
 //
 // YOUR TASK:
 //   1. Transform LiDAR point to camera frame via T_cam_lidar
