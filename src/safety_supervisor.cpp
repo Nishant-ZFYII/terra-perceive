@@ -6,63 +6,143 @@
 
 #include <cmath>
 #include <limits>
+#include <algorithm>
+#include <chrono>
+#include <iostream>
 
 float StoppingDistanceModel::compute(float velocity_mps, float friction_mu) const {
-    // TODO (P1-M5.1): d_stop = v^2 / (2 * mu * g) + v * t_react
-    //   Handle edge cases: velocity <= 0 -> d_stop = 0
-    //   friction_mu clamped to [0.1, 1.0] to avoid division by zero
-    //
-    // Verification values:
-    //   v=2, mu=0.6: d_stop = 4/(2*0.6*9.81) + 2*0.2 = 0.34 + 0.4 = 0.74m
-    //   v=5, mu=0.6: d_stop = 25/(2*0.6*9.81) + 5*0.2 = 2.12 + 1.0 = 3.12m
-    return 0.0f;
-}
 
-SafetySupervisor::SafetySupervisor(const SafetyConfig& config,
-                                   const StoppingDistanceModel& model)
-    : config_(config), model_(model) {}
+    if(velocity_mps <= 0.0f) {
+        return 0.0f; // No stopping distance if not moving
+    }
+    //if friction <=0, return error.
+    if(friction_mu <= 0.0f) {
+        return std::numeric_limits<float>::infinity(); // Infinite stopping distance on zero friction
+    }
+    float braking_term = (velocity_mps * velocity_mps) / (2.0f * friction_mu * gravity);  
+    float reaction_term = velocity_mps * reaction_time_s;
+
+    float d_stop = braking_term + reaction_term;
+    return d_stop;
+}
 
 TTCResult SafetySupervisor::compute_ttc(float vehicle_velocity, float d_worker,
                                         float worker_speed, float friction_mu) const {
     TTCResult r;
-    // TODO (P1-M5.2): TTC computation
-    //   v_relative = vehicle_velocity + worker_speed (closing speed)
-    //   d_stop = model_.compute(vehicle_velocity, friction_mu)
-    //   if v_relative <= 0: TTC = infinity (diverging, safe)
-    //   else: TTC = (d_worker - d_stop) / v_relative
-    //   if d_worker < d_stop: TTC is negative (already too late)
-    //   is_safe = (d_worker > d_stop) && (TTC > config_.ttc_proportional)
+    // distance to collision within a safety wedge.
+
+    //case 1: not moving or worker moving away -> safe
+    r.v_relative = vehicle_velocity - worker_speed;
+
+    r.d_stop = model_.compute(vehicle_velocity, friction_mu);
+    r.d_worker = d_worker;
+    if (r.v_relative <= 0.0f) {
+        r.ttc_seconds = std::numeric_limits<float>::infinity(); // Diverging, safe
+    } else {
+        r.ttc_seconds = (d_worker - r.d_stop) / r.v_relative;
+    }
+    r.is_safe = (d_worker > r.d_stop) && (r.ttc_seconds > config_.ttc_proportional);
     return r;
 }
 
 SafetyIntervention SafetySupervisor::evaluate(float vehicle_velocity_mps,
                                               float d_to_nearest_worker,
                                               float worker_approach_speed,
-                                              float terrain_traversability) {
+                                              float terrain_traversability,
+                                              double current_timestamp) {
+    auto start = std::chrono::high_resolution_clock::now();
     SafetyIntervention intervention;
-    // TODO (P1-M5.3 + P1-M5.4): Priority-ordered intervention
-    //
-    // Step 1: Compute friction from traversability (P1-M5.4)
-    //   float mu = traversability_to_friction(terrain_traversability);
-    //
-    // Step 2: Compute TTC
-    //   TTCResult ttc = compute_ttc(vehicle_velocity_mps, d_to_nearest_worker,
-    //                               worker_approach_speed, mu);
-    //
-    // Step 3: Decision (P1-M5.3)
-    //   TTC <= 0 or d_worker < d_stop -> EMERGENCY_STOP (scale=0.0)
-    //   TTC < 2.0s -> HARD_BRAKE (scale=0.1)
-    //   TTC < 5.0s -> PROPORTIONAL_SCALE (scale = (TTC-2)/(5-2))
-    //   else -> NONE (scale=1.0)
-    //
-    // Step 4: Log event (P1-M5.5)
-    //   Push SafetyEvent to events_ vector
+    float mu = traversability_to_friction(terrain_traversability); 
+    TTCResult ttc = compute_ttc(vehicle_velocity_mps, d_to_nearest_worker,
+                                worker_approach_speed, mu);
+    //Decision
+    if(!lidar_initialized_ || (current_timestamp - last_lidar_timestamp_) * 1000.0 > config_.lidar_timeout_ms) {
+        //Emergency stop if LiDAR timeout
+        intervention.level = SafetyIntervention::EMERGENCY_STOP;
+        intervention.scale_factor = 0.0f;
+        intervention.reason = "LiDAR timeout";
+
+    }
+    else if (ttc.ttc_seconds <= 0.0f ) {
+        //Emergency stop
+        intervention.level = SafetyIntervention::EMERGENCY_STOP;
+        intervention.scale_factor = 0.0f;
+        if(ttc.d_worker < ttc.d_stop) {
+            intervention.reason = "Worker too close: d_worker < d_stop";
+        } else {
+            intervention.reason = "TTC <= 0";
+        }
+    }
+    else if (ttc.ttc_seconds < config_.ttc_hard_brake) {
+        //Hard brake
+        intervention.level = SafetyIntervention::HARD_BRAKE;
+        intervention.scale_factor = 0.1f; // Scale to 10% of current speed
+        intervention.reason = "TTC < 2s";
+    }
+    else if (ttc.ttc_seconds < config_.ttc_proportional) {
+        //Proportional scale
+        intervention.level = SafetyIntervention::PROPORTIONAL_SCALE;
+        intervention.scale_factor = (ttc.ttc_seconds - config_.ttc_hard_brake) / 
+                                    (config_.ttc_proportional - config_.ttc_hard_brake);
+        intervention.reason = "TTC < 5s";
+    }
+    else {
+        //No intervention
+        intervention.level = SafetyIntervention::NONE;
+        intervention.scale_factor = 1.0f; // No change
+        intervention.reason = "TTC >= 5s";
+    }
+
+    //log events
+    events_.push_back(SafetyEvent{
+        .timestamp = current_timestamp,
+        .rule = intervention.reason,
+        .d_worker = ttc.d_worker,
+        .d_stop = ttc.d_stop,
+        .ttc = ttc.ttc_seconds,
+        .friction_mu = mu,
+        .vel_before = vehicle_velocity_mps,
+        .vel_after = vehicle_velocity_mps * intervention.scale_factor
+    });
+    auto end = std::chrono::high_resolution_clock::now();
+    double latency_ms = std::chrono::duration<double, std::milli>(end - start).count();
+    log_loop_latency(latency_ms);
+
     return intervention;
 }
 
 float SafetySupervisor::traversability_to_friction(float trav_score) const {
-    // TODO (P1-M5.4): mu = mu_base + mu_trav_scale * trav_score
-    //   trav_score 0.0 -> mu = 0.3 (worst terrain)
-    //   trav_score 1.0 -> mu = 0.8 (good terrain)
-    return config_.mu_base;
+
+    float mu = 0.0f;
+    //clamp traversability score to [0,1]
+    trav_score = std::max(0.0f, std::min(1.0f, trav_score));
+    mu = config_.mu_base + config_.mu_trav_scale * trav_score;
+    return mu;
 }
+
+void SafetySupervisor::update_lidar_timestamp(double timestamp) {
+    
+    
+    last_lidar_timestamp_ = timestamp;
+    lidar_initialized_ = true;
+    
+}
+
+void SafetySupervisor::log_loop_latency(double latency_ms) {
+    loop_latencies_ms_.push_back(latency_ms);
+    // Optionally, compute and log p50 and p95 latencies here
+}
+
+void SafetySupervisor::loop_latency() {
+    if(loop_latencies_ms_.empty()) {
+        std::cout << "No loop latency data collected yet." << std::endl;
+        return;
+    }
+    std::vector<double> sorted_latencies = loop_latencies_ms_;
+    std::sort(sorted_latencies.begin(), sorted_latencies.end());
+    double p50 = sorted_latencies[sorted_latencies.size() / 2];
+    double p95 = sorted_latencies[static_cast<size_t>(sorted_latencies.size() * 0.95)];
+    std::cout << "Loop Latency - P50: " << p50 << " ms, P95: " << p95 << " ms" << std::endl;
+}
+
+

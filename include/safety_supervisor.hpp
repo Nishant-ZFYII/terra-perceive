@@ -74,11 +74,13 @@ struct SafetyConfig {
 
 class SafetySupervisor {
    public:
-    SafetySupervisor(const SafetyConfig& config, const StoppingDistanceModel& model);
+    SafetySupervisor(const SafetyConfig& config, const StoppingDistanceModel& model)
+        : config_(config), model_(model) {}
 
     // Core computation: given current state, compute safe velocity
     SafetyIntervention evaluate(float vehicle_velocity_mps, float d_to_nearest_worker,
-                                float worker_approach_speed, float terrain_traversability);
+                                float worker_approach_speed, float terrain_traversability,
+                                double current_timestamp);
 
     // Compute TTC for a single obstacle
     TTCResult compute_ttc(float vehicle_velocity, float d_worker,
@@ -87,11 +89,27 @@ class SafetySupervisor {
     // Map traversability score to friction coefficient
     float traversability_to_friction(float trav_score) const;
 
+    //update lidar time
+    void update_lidar_timestamp(double timestamp);
+
     // Event log
     const std::vector<SafetyEvent>& event_log() const { return events_; }
+
+    //report loop latency for p50 and p95
+    void log_loop_latency(double latency_ms);
+    
+
 
    private:
     SafetyConfig config_;
     StoppingDistanceModel model_;
     std::vector<SafetyEvent> events_;
+
+    //update lidar timestamp
+    double last_lidar_timestamp_ = 0.0;
+    bool lidar_initialized_ = false;
+
+    //monitor loop latency
+    std::vector<double> loop_latencies_ms_;
+    void loop_latency();
 };
