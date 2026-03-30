@@ -22,6 +22,8 @@ import tempfile
 
 import numpy as np
 import yaml
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.colors import BoundaryNorm, ListedColormap
@@ -275,7 +277,7 @@ def plot_comparison(geometry_grid, fused_grid, modifier_grid,
     os.makedirs(out_path[:out_path.rfind("/")], exist_ok=True)
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
     print(f"Saved → {out_path}")
-    plt.show()
+    #plt.show()
 
 # ---------------------------------------------------------------------------
 # Main
@@ -331,7 +333,7 @@ def main():
     # 6. Visualise
     print("\n[5/5] Generating comparison plot...")
     camera_image = Image.open(image_path).convert("RGB")
-    out_path = os.path.join(OUT_DIR, "bev_fusion_comparison.png")
+    out_path = sys.argv[3] if len(sys.argv) > 3 else os.path.join(OUT_DIR, "bev_fusion_comparison.png")
     plot_comparison(geometry_grid, fused_grid, modifier_grid,
                     camera_image, label_map, out_path)
 

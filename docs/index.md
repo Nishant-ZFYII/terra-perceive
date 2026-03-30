@@ -14,6 +14,7 @@ Built using **C++17**, **Eigen3**, and **ROS2** on the **[RELLIS-3D](https://git
 ## Phase 1: Core Perception & Safety (Current Focus)
 
 Phase 1 focuses on the primary perception-to-safety loop: taking raw LiDAR data and producing actionable safety interventions based on terrain geometry.
+With P1-M5 (Kinematic Safety Supervisor) complete, we are now wrapping P1-M6 (Docker + Integration) so the full pipeline can run from a single smoke-test command.
 
 | Milestone | Implementation | Status |
 |-----------|----------------|--------|
@@ -22,7 +23,7 @@ Phase 1 focuses on the primary perception-to-safety loop: taking raw LiDAR data 
 | [M3: Traversability Grid](m3-traversability) | Risk/confidence maps using PCA surface normals | Completed |
 | [M4: Camera-LiDAR Fusion](m4-fusion) | Homogeneous transforms and semantic segmentation (SegFormer) | Completed |
 | [M5: Kinematic Safety](m5-safety) | Stopping distance, TTC, terrain-aware friction, priority interventions | Completed |
-| M6: Integration | Docker-compose orchestration and smoke testing | Pending |
+| [M6: Integration](m6-docker) | Docker image, smoke test, end-to-end pipeline | Completed |
 
 ## Phase 2: Tracking & Production Transport
 

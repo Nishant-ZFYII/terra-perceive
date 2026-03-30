@@ -1,22 +1,68 @@
-# Dockerfile.perception — C++ perception services
-# Builds RANSAC, traversability, projection, tracker, safety from source
+# Dockerfile.perception — Phase 1 perception pipeline
+# Builds C++ core + Python scripts + SegFormer, bundles sample data.
+# docker-compose up runs the smoke test by default.
+
 FROM ros:humble-ros-base
 
+# --- System deps ---
 RUN apt-get update && apt-get install -y \
     libeigen3-dev \
     ros-humble-nav2-costmap-2d \
     ros-humble-tf2-ros \
+    python3-pip \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# --- Python deps (CPU-only torch to keep image size reasonable) ---
+RUN pip3 install --no-cache-dir \
+    numpy \
+    matplotlib \
+    pillow \
+    pyyaml \
+    imageio \
+    transformers \
+    && pip3 install --no-cache-dir \
+    torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+# --- Pre-download SegFormer model weights (baked into image, no network at runtime) ---
+RUN python3 -c "\
+from transformers import AutoImageProcessor, SegformerForSemanticSegmentation; \
+AutoImageProcessor.from_pretrained('nvidia/segformer-b0-finetuned-ade-512-512'); \
+SegformerForSemanticSegmentation.from_pretrained('nvidia/segformer-b0-finetuned-ade-512-512'); \
+print('SegFormer weights cached.')"
+
+# --- Copy source ---
 WORKDIR /ws/src/construction_perception
 COPY CMakeLists.txt package.xml ./
 COPY include/ include/
 COPY src/ src/
-COPY ros2_nodes/ ros2_nodes/
 COPY config/ config/
 COPY launch/ launch/
+COPY tests/ tests/
 
+# --- Build C++ (no ROS2 nodes needed for Phase 1) ---
 WORKDIR /ws
-RUN . /opt/ros/humble/setup.sh && colcon build --symlink-install
+RUN . /opt/ros/humble/setup.sh && \
+    colcon build --packages-select construction_perception \
+    --cmake-args -DBUILD_ROS2_NODES=OFF
+
+# Symlink built binaries so run_pipeline.sh finds them at $REPO_ROOT/build/...
+RUN mkdir -p /ws/src/construction_perception/build/construction_perception && \
+    ln -s /ws/build/construction_perception/pipeline_runner \
+          /ws/src/construction_perception/build/construction_perception/pipeline_runner && \
+    ln -s /ws/build/construction_perception/safety_runner \
+          /ws/src/construction_perception/build/construction_perception/safety_runner
+
+# --- Copy Python scripts + sample data ---
+COPY scripts/ /ws/src/construction_perception/scripts/
+COPY python/   /ws/src/construction_perception/python/
+COPY data/sample/ /ws/src/construction_perception/data/sample/
+
+# --- Offline mode: use cached HuggingFace weights, no network call at runtime ---
+ENV TRANSFORMERS_OFFLINE=1
+ENV HF_HUB_OFFLINE=1
+
+WORKDIR /ws/src/construction_perception
 
 ENTRYPOINT ["/bin/bash", "-c", ". /ws/install/setup.bash && exec \"$@\"", "--"]
+CMD ["bash", "scripts/smoke_test.sh"]

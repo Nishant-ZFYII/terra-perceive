@@ -97,6 +97,9 @@ class SafetySupervisor {
 
     //report loop latency for p50 and p95
     void log_loop_latency(double latency_ms);
+
+    void report_latency_stats();
+
     
 
 

@@ -38,7 +38,10 @@ add_library(point_cloud_loader src/point_cloud_loader.cpp)
 target_link_libraries(point_cloud_loader Eigen3::Eigen)
 
 add_executable(pipeline_runner src/pipeline_runner.cpp)
-target_link_libraries(pipeline_runner point_cloud_loader ransac_ground_seg traversability Eigen3::Eigen)  
+target_link_libraries(pipeline_runner point_cloud_loader ransac_ground_seg traversability Eigen3::Eigen)
+
+add_executable(safety_runner src/safety_runner.cpp)
+target_link_libraries(safety_runner safety_supervisor Eigen3::Eigen)
 
 # --- Phase 2: Tracking libraries (stubs for now) ---
 

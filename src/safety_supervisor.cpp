@@ -145,4 +145,8 @@ void SafetySupervisor::loop_latency() {
     std::cout << "Loop Latency - P50: " << p50 << " ms, P95: " << p95 << " ms" << std::endl;
 }
 
+void SafetySupervisor::report_latency_stats() {                                                                                      
+      loop_latency();                      
+}    
+
 

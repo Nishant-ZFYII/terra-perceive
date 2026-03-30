@@ -198,6 +198,86 @@ def plot_3d_bev(mean_z, risk, out_path, title_suffix=""):
 # GIF
 # ---------------------------------------------------------------------------
 
+def make_gif_combined(bin_dir, out_gif, fps=2):
+    """Process every .bin frame → animated GIF with 2D BEV + 6-panel side by side."""
+    try:
+        import imageio
+    except ImportError:
+        print("imageio not found — install with:  pip install imageio")
+        return
+
+    bin_files = sorted([
+        os.path.join(bin_dir, f)
+        for f in os.listdir(bin_dir) if f.endswith(".bin")
+    ])
+    if not bin_files:
+        print(f"No .bin files found in {bin_dir}")
+        return
+
+    frames = []
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for i, bin_path in enumerate(bin_files):
+            grid_path = os.path.join(tmpdir, f"grid_{i:03d}.bin")
+            png_path  = os.path.join(tmpdir, f"frame_{i:03d}.png")
+            print(f"[{i+1}/{len(bin_files)}] {os.path.basename(bin_path)}")
+            if not run_pipeline(bin_path, grid_path):
+                continue
+
+            risk, confidence, slope_deg, roughness, step_height, mean_z = load_real_grid(grid_path)
+            img = build_color_image(risk, confidence)
+            suffix = f" — frame {i:03d}"
+
+            # Combined figure: 2D BEV (left col) + 6 feature panels (right 2x3)
+            fig = plt.figure(figsize=(28, 10))
+            fig.suptitle(f"Terra Perceive — BEV Traversability{suffix}", fontsize=14)
+
+            # Left: 2D BEV
+            ax_bev = fig.add_subplot(1, 4, 1)
+            ax_bev.imshow(img, origin="upper",
+                          extent=[Y_MIN, Y_MAX, X_MIN, X_MAX], aspect="equal")
+            ax_bev.scatter([0], [0], c="blue", s=120, marker="^", zorder=5)
+            ax_bev.set_title("BEV Traversability")
+            ax_bev.set_xlabel("Y — lateral (m)")
+            ax_bev.set_ylabel("X — forward (m)")
+            legend_handles = [
+                plt.matplotlib.patches.Patch(color=(0.0, 0.8, 0.0), label="Safe"),
+                plt.matplotlib.patches.Patch(color=(1.0, 0.8, 0.0), label="Caution"),
+                plt.matplotlib.patches.Patch(color=(0.9, 0.1, 0.1), label="Hazard"),
+                plt.matplotlib.patches.Patch(color=(0.5, 0.5, 0.5), label="Unknown"),
+            ]
+            ax_bev.legend(handles=legend_handles, loc="lower right", fontsize=7)
+
+            # Right: 6 feature panels
+            panels = [
+                (mean_z,      "Elevation (mean_z)", "terrain",  "m"),
+                (risk,        "Risk",               "RdYlGn_r", "[0–1]"),
+                (slope_deg,   "Slope",              "hot",      "deg"),
+                (roughness,   "Roughness",          "hot",      "λ₀/Σλ"),
+                (step_height, "Step Height",        "hot",      "m"),
+                (confidence,  "Confidence",         "RdYlGn",   "[0–1]"),
+            ]
+            for j, (data, title, cmap, unit) in enumerate(panels):
+                ax = fig.add_subplot(2, 4, (j // 3) * 4 + (j % 3) + 2)
+                im = ax.imshow(data, origin="upper",
+                               extent=[Y_MIN, Y_MAX, X_MIN, X_MAX],
+                               cmap=cmap, aspect="equal")
+                ax.set_title(title, fontsize=9)
+                ax.set_xlabel("Y (m)", fontsize=7)
+                ax.set_ylabel("X (m)", fontsize=7)
+                plt.colorbar(im, ax=ax, label=unit, shrink=0.7)
+
+            plt.tight_layout()
+            plt.savefig(png_path, dpi=100, bbox_inches="tight")
+            plt.close(fig)
+            frames.append(imageio.imread(png_path))
+
+    if frames:
+        imageio.mimsave(out_gif, frames, fps=fps, loop=0)
+        print(f"\nGIF saved: {out_gif}  ({len(frames)} frames @ {fps} fps)")
+    else:
+        print("No frames rendered.")
+
+
 def make_gif(bin_dir, out_gif, fps=2):
     """Process every .bin frame in bin_dir → animated GIF of 2D BEV."""
     try:
@@ -243,13 +323,21 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="BEV Traversability Visualizer")
     parser.add_argument("--bin",       help="Single .bin LiDAR frame (runs pipeline_runner)")
     parser.add_argument("--grid",      help="Pre-exported grid .bin (skips pipeline_runner)")
-    parser.add_argument("--gif",       help="Directory of .bin frames → animated GIF")
+    parser.add_argument("--gif",       help="Directory of .bin frames → animated 2D BEV GIF")
+    parser.add_argument("--gif-combined", dest="gif_combined",
+                        help="Directory of .bin frames → animated combined GIF (2D BEV + 6 panels)")
     parser.add_argument("--synthetic", action="store_true", help="Use synthetic demo data")
     parser.add_argument("--out",       default="bev", help="Output prefix / GIF path")
     parser.add_argument("--fps",       type=int, default=2, help="GIF frames per second")
     args = parser.parse_args()
 
-    # --- GIF mode ---
+    # --- Combined GIF mode ---
+    if args.gif_combined:
+        gif_path = args.out if args.out.endswith(".gif") else args.out + ".gif"
+        make_gif_combined(args.gif_combined, out_gif=gif_path, fps=args.fps)
+        exit(0)
+
+    # --- 2D BEV GIF mode ---
     if args.gif:
         gif_path = args.out if args.out.endswith(".gif") else args.out + ".gif"
         make_gif(args.gif, out_gif=gif_path, fps=args.fps)
