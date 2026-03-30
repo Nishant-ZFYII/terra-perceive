@@ -1,6 +1,6 @@
 # Terra Perceive
 
-**LiDAR + camera perception pipeline for unstructured terrain — built from scratch in C++**
+**LiDAR + camera perception pipeline for unstructured terrain — Real-time traversability and worker safety for autonomous construction equipment**
 
 ![Tests](https://img.shields.io/badge/tests-52%2F52-brightgreen)
 ![Docker](https://img.shields.io/badge/docker-nishantzfyii%2Fterra--perceive-blue)
