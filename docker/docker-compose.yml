@@ -1,49 +1,60 @@
-version: "3.8"
+# Phase 1 — standalone perception pipeline.
+# Phase 2 services (nats, ml-inference, dashboard) are commented out below.
+#
+# Usage:
+#   docker-compose up              # run smoke test, outputs in ./output/
+#   docker-compose run perception bash scripts/run_pipeline.sh  # full pipeline
 
 services:
-  nats:
-    image: nats:latest
-    ports:
-      - "4222:4222"   # client
-      - "8222:8222"   # monitoring
-    command: ["--jetstream"]
-
   perception:
     build:
       context: ..
       dockerfile: docker/Dockerfile.perception
-    depends_on:
-      - nats
     volumes:
-      - ../config:/ws/config:ro
-    network_mode: host
+      - ../output:/ws/src/construction_perception/output
+    # Phase 2 services below — uncomment when ready
+    # depends_on:
+    #   - nats
 
-  ml-inference:
+  # --- Cartographer SLAM (P2-M1.3) ---
+  # Only runs when explicitly invoked with --profile cartographer
+  cartographer:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.ml
-    depends_on:
-      - nats
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: [gpu]
+      dockerfile: docker/Dockerfile.cartographer
+    profiles:
+      - cartographer
+    volumes:
+      - ../data/RELLIS-3D:/data
+      - ../data:/output
     network_mode: host
 
-  dashboard:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.dashboard
-    depends_on:
-      - nats
-    ports:
-      - "8501:8501"
-
-  # Optional: ROS2 adapter for RViz/Nav2 visualization
-  # ros2-adapter:
+  # --- Phase 2 (disabled for Phase 1) ---
+  # nats:
+  #   image: nats:latest
+  #   ports:
+  #     - "4222:4222"
+  #     - "8222:8222"
+  #   command: ["--jetstream"]
+  #
+  # ml-inference:
   #   build:
   #     context: ..
-  #     dockerfile: docker/Dockerfile.perception
-  #   command: ["ros2", "launch", "construction_perception", "full_pipeline.launch.py"]
+  #     dockerfile: docker/Dockerfile.ml
+  #   depends_on:
+  #     - nats
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - capabilities: [gpu]
   #   network_mode: host
+  #
+  # dashboard:
+  #   build:
+  #     context: ..
+  #     dockerfile: docker/Dockerfile.dashboard
+  #   depends_on:
+  #     - nats
+  #   ports:
+  #     - "8501:8501"

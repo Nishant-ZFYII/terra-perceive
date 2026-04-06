@@ -1,0 +1,68 @@
+# Dockerfile.cartographer — Google Cartographer SLAM on RELLIS-3D data.
+# Uses ROS Kinetic (Ubuntu 16.04) — the environment the unmannedlab fork was built for.
+# Zero patches needed: GCC 5, PCL 1.7, protobuf 2.x are all compatible.
+#
+# Build:   docker compose -f docker/docker-compose.yml --profile cartographer build cartographer
+# Run:     docker compose -f docker/docker-compose.yml --profile cartographer run cartographer
+
+FROM ros:kinetic-ros-base-xenial
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Dependencies from the README (Python 2 era)
+# Don't touch sources.list — use whatever the base image ships with
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    python-wstool \
+    python-rosdep \
+    ninja-build \
+    stow \
+    libsuitesparse-dev \
+    libgoogle-glog-dev \
+    libgflags-dev \
+    liblua5.3-dev \
+    libboost-all-dev \
+    libcairo2-dev \
+    libeigen3-dev \
+    libprotobuf-dev \
+    protobuf-compiler \
+    ros-kinetic-eigen-conversions \
+    ros-kinetic-tf2-eigen \
+    ros-kinetic-urdf \
+    ros-kinetic-nav-msgs \
+    ros-kinetic-visualization-msgs \
+    ros-kinetic-pcl-conversions \
+    ros-kinetic-pcl-ros \
+    ros-kinetic-tf2-ros \
+    ros-kinetic-rosbag \
+    ros-kinetic-robot-state-publisher \
+    ros-kinetic-rviz \
+    ros-kinetic-xacro \
+    ros-kinetic-joint-state-publisher \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone the repo (it IS the catkin workspace)
+RUN git clone https://github.com/unmannedlab/cartographer.git /catkin_ws
+WORKDIR /catkin_ws
+
+# Install proto3 (from README — required on Xenial which ships protobuf 2.6)
+RUN src/cartographer/scripts/install_proto3.sh
+
+# Install ROS dependencies
+RUN apt-get update && \
+    rosdep update && \
+    rosdep install --from-paths src --ignore-src -y --rosdistro=kinetic || true && \
+    rm -rf /var/lib/apt/lists/*
+
+# Build (from README)
+RUN /bin/bash -c "source /opt/ros/kinetic/setup.bash && \
+    catkin_make_isolated --install --use-ninja"
+
+VOLUME ["/data"]
+
+ENTRYPOINT ["/bin/bash", "-c", "source /catkin_ws/install_isolated/setup.bash && exec \"$@\"", "--"]
+CMD ["roslaunch", "/catkin_ws/cart_config/launch/offline_warthog_3d_ouster.launch", \
+     "config_path:=/catkin_ws/cart_config/config", \
+     "bag_filename:=/data/00000_00.bag"]

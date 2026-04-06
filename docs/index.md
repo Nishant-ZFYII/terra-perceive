@@ -11,10 +11,10 @@ Built using **C++17**, **Eigen3**, and **ROS2** on the **[RELLIS-3D](https://git
 
 ---
 
-## Phase 1: Core Perception & Safety (Current Focus)
+## Phase 1: Core Perception & Safety (Complete)
 
-Phase 1 focuses on the primary perception-to-safety loop: taking raw LiDAR data and producing actionable safety interventions based on terrain geometry.
-With P1-M5 (Kinematic Safety Supervisor) complete, we are now wrapping P1-M6 (Docker + Integration) so the full pipeline can run from a single smoke-test command.
+Phase 1 focused on the perception-to-safety loop: taking raw LiDAR data and producing actionable safety interventions grounded in kinematics.
+With P1-M6 (Docker + Integration) and P1-M7 (README, demo, PI ship) finished, the repo now ships a smoke-testable container that outputs BEV visuals, safety logs, and timing reports in under two minutes.
 
 | Milestone | Implementation | Status |
 |-----------|----------------|--------|
@@ -24,23 +24,45 @@ With P1-M5 (Kinematic Safety Supervisor) complete, we are now wrapping P1-M6 (Do
 | [M4: Camera-LiDAR Fusion](m4-fusion) | Homogeneous transforms and semantic segmentation (SegFormer) | Completed |
 | [M5: Kinematic Safety](m5-safety) | Stopping distance, TTC, terrain-aware friction, priority interventions | Completed |
 | [M6: Integration](m6-docker) | Docker image, smoke test, end-to-end pipeline | Completed |
+| [M7: README + Demo](m7-ship) | Technical README, in-repo demo, fresh-clone verification | Completed |
 
-## Phase 2: Tracking & Production Transport
+## Phase 2: Perception Depth + SLAM + Production Infrastructure (In Progress)
 
-The second phase transitions the pipeline into a distributed system with persistent object awareness.
+Phase 2 proves the system can go beyond single-frame perception: multi-source odometry, temporal world models, multi-object tracking, multi-dataset generalization, and production transport — all integrated into a single codebase.
 
-- **NATS JetStream**: Production-grade messaging for safety audit replay and low-latency transport.
-- **Protobuf Schemas**: Standardized perception and telemetry messages.
-- **Multi-Object Tracking**: Kalman filters and the SORT algorithm for persistent worker/vehicle tracking.
-- **Probabilistic Scoring**: Uncertainty propagation through the traversability grid.
+### Odometry & SLAM (Weeks 1–4)
 
-## Phase 3: Deployment & Operations
+| Milestone | Implementation | Status |
+|-----------|----------------|--------|
+| [M7: Triple Odometry](m7-odometry) | GPS/IMU extraction, KISS-ICP, Cartographer benchmark, ATE/RPE comparison | Completed |
+| M8: LiDAR-Inertial SLAM | Scan Context loop closure, IMU pre-integration, GPS factors, g2o pose graph | Planned |
 
-Final hardening and operational tools for fleet-scale management.
+### Mapping & Tracking (Weeks 5–7)
 
-- **Streamlit Ops Dashboard**: Real-time telemetry visualization.
-- **Nav2 Costmap Plugin**: Exporting custom traversability layers to the ROS2 navigation stack.
-- **TensorRT Optimization**: FP16 export for deployment on NVIDIA Jetson Orin.
+| Milestone | Implementation | Status |
+|-----------|----------------|--------|
+| M9: Accumulated BEV Map | World map from multi-source odometry, NATS bootstrap | Planned |
+| M10: SORT Tracker | Kalman filter + Hungarian assignment (C++/Eigen, from scratch) | Planned |
+| M11: Tracker-Safety Loop | YOLO + tracked object TTC, NATS wiring | Planned |
+
+### Evaluation & Generalization (Weeks 8–13)
+
+| Milestone | Implementation | Status |
+|-----------|----------------|--------|
+| M12: Ablation Study | Probabilistic traversability vs heuristic, CBF vs kinematic TTC | Planned |
+| M13: nuScenes | Unified calibration adapter, second domain validation | Planned |
+| M14: MOTA Evaluation | Tracking metrics on nuScenes | Planned |
+| M15: 3D Viz + Demo | Four-pane visualization, gRPC control plane | Planned |
+| M16: ROS2 Live Pipeline | Real-time rosbag replay | Planned |
+| M17: Ship | Docker compose, evaluation harness, 95+ tests | Planned |
+
+## Phase 3: Deployment & Operations (Stretch)
+
+Final hardening and operational tools.
+
+- **Munkres Hungarian**, SegFormer fine-tuning, multi-obstacle QP
+- **Sensor fusion EKF**, Gazebo simulation, Jetson deployment
+- **Streamlit Ops Dashboard**, Nav2 costmap plugin, TensorRT optimization
 
 ---
 
