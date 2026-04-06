@@ -26,43 +26,36 @@ With P1-M6 (Docker + Integration) and P1-M7 (README, demo, PI ship) finished, th
 | [M6: Integration](m6-docker) | Docker image, smoke test, end-to-end pipeline | Completed |
 | [M7: README + Demo](m7-ship) | Technical README, in-repo demo, fresh-clone verification | Completed |
 
-## Phase 2: Perception Depth + SLAM + Production Infrastructure (In Progress)
+## Phase 2: Odometry, SLAM, and Tracking (In Progress)
 
-Phase 2 proves the system can go beyond single-frame perception: multi-source odometry, temporal world models, multi-object tracking, multi-dataset generalization, and production transport — all integrated into a single codebase.
+Phase 1 handles single frames. Phase 2 adds the temporal dimension — where is the robot over time, what moved, and how does the map accumulate across a full traversal.
 
-### Odometry & SLAM (Weeks 1–4)
+### Odometry & SLAM
 
 | Milestone | Implementation | Status |
 |-----------|----------------|--------|
 | [M7: Triple Odometry](m7-odometry) | GPS/IMU extraction, KISS-ICP, Cartographer benchmark, ATE/RPE comparison | Completed |
 | M8: LiDAR-Inertial SLAM | Scan Context loop closure, IMU pre-integration, GPS factors, g2o pose graph | Planned |
 
-### Mapping & Tracking (Weeks 5–7)
+### Mapping & Tracking
 
 | Milestone | Implementation | Status |
 |-----------|----------------|--------|
-| M9: Accumulated BEV Map | World map from multi-source odometry, NATS bootstrap | Planned |
+| M9: Accumulated BEV Map | World map from multi-source odometry, NATS transport | Planned |
 | M10: SORT Tracker | Kalman filter + Hungarian assignment (C++/Eigen, from scratch) | Planned |
 | M11: Tracker-Safety Loop | YOLO + tracked object TTC, NATS wiring | Planned |
 
-### Evaluation & Generalization (Weeks 8–13)
+### Evaluation & Generalization
 
 | Milestone | Implementation | Status |
 |-----------|----------------|--------|
 | M12: Ablation Study | Probabilistic traversability vs heuristic, CBF vs kinematic TTC | Planned |
 | M13: nuScenes | Unified calibration adapter, second domain validation | Planned |
-| M14: MOTA Evaluation | Tracking metrics on nuScenes | Planned |
-| M15: 3D Viz + Demo | Four-pane visualization, gRPC control plane | Planned |
-| M16: ROS2 Live Pipeline | Real-time rosbag replay | Planned |
-| M17: Ship | Docker compose, evaluation harness, 95+ tests | Planned |
+| M14–M17 | MOTA eval, 3D viz, ROS2 live pipeline, final ship | Planned |
 
-## Phase 3: Deployment & Operations (Stretch)
+## Phase 3: Deployment (Stretch)
 
-Final hardening and operational tools.
-
-- **Munkres Hungarian**, SegFormer fine-tuning, multi-obstacle QP
-- **Sensor fusion EKF**, Gazebo simulation, Jetson deployment
-- **Streamlit Ops Dashboard**, Nav2 costmap plugin, TensorRT optimization
+Jetson deployment, Gazebo simulation, Nav2 costmap plugin, TensorRT optimization.
 
 ---
 

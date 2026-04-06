@@ -20,11 +20,11 @@ This milestone extracts ego-pose from three independent sources on the same RELL
 
 ## The Three Sources
 
-| Source | Method | Loop Closure | What I Built |
-|--------|--------|-------------|--------------|
+| Source | Method | Loop Closure | Module |
+|--------|--------|-------------|--------|
 | **GPS/IMU** | VectorNav VN-300 lat/lon → ENU conversion | N/A | `scripts/extract_poses_gps.py` |
-| **KISS-ICP** | Point-to-point ICP scan matching (Vizzo et al., RA-L 2023) | No | `scripts/run_kiss_icp.py` |
-| **Cartographer** | Submap-based SLAM with loop closure (Hess et al., ICRA 2016) | Yes | `docker/Dockerfile.cartographer` + official RELLIS-3D poses |
+| **KISS-ICP** | Point-to-point ICP scan matching [1] | No | `scripts/run_kiss_icp.py` |
+| **Cartographer** | Submap-based SLAM with loop closure [3] | Yes | `docker/Dockerfile.cartographer` + official RELLIS-3D poses |
 
 ### Why three?
 
@@ -66,7 +66,7 @@ The bags are sequential with ~85ms gaps between them — verified by printing th
 
 ## M1.2: KISS-ICP LiDAR Odometry
 
-KISS-ICP (Vizzo et al., RA-L 2023) argues that "good old point-to-point ICP" is surprisingly powerful when combined with three key ingredients:
+KISS-ICP [1] argues that "good old point-to-point ICP" is surprisingly powerful when combined with three key ingredients:
 
 1. **Adaptive thresholding** — the correspondence distance threshold shrinks as the scans converge, preventing false matches from corrupting the pose estimate. On featureless terrain (flat grass), the threshold tightens automatically.
 
@@ -80,16 +80,25 @@ I wrote a custom RELLIS-3D data loader that reads the KITTI-format `.bin` files 
 
 ### Accumulated Point Cloud Map
 
-<!-- TODO: Replace with actual GIF when generated -->
+![KISS-ICP Polyscope 3D](assets/kiss_icp_polyscope_demo.gif)
+
+*Real-time KISS-ICP visualization in Polyscope (10x speed). Green: current scan frame cloud. Pink: local map keypoints. The map grows as the robot traverses the trail, with the voxel-based local map retaining structure while discarding distant points.*
+
 ![KISS-ICP BEV Accumulation](assets/kiss_icp_bev_accumulation.gif)
 
-*Camera view (left) and accumulated BEV point cloud map (right) growing as the robot drives through the trail. Trajectory shown in red. Points colored by height.*
+*Camera view (left) and accumulated BEV point cloud map (right) growing as the robot drives through the trail. Trajectory shown in red. Points colored by height — the shift from blue to yellow reflects the ~9m elevation gain over the sequence.*
+
+### GPS vs ICP — Before Alignment
+
+![GPS vs ICP Trajectory](assets/trajectory_gps_vs_icp.png)
+
+*Raw GPS (blue) and KISS-ICP (red) trajectories before Umeyama alignment. Both show the same L-shaped path but in different coordinate frames — GPS is in ENU (geographic north), ICP is in the sensor's startup frame. The shape agreement confirms both are valid; the frame offset is removed during alignment in M1.5.*
 
 ---
 
 ## M1.3: Google Cartographer
 
-Cartographer (Hess et al., ICRA 2016) takes a fundamentally different approach from KISS-ICP. Instead of one continuous map, it builds many small **submaps** — each locally consistent over a few seconds of data. A background thread continuously matches new scans against all finished submaps. When it finds a match (a **loop closure**), it adds a constraint to a pose graph and runs Sparse Pose Adjustment (SPA) to globally optimize all poses.
+Cartographer [3] takes a fundamentally different approach from KISS-ICP. Instead of one continuous map, it builds many small **submaps** — each locally consistent over a few seconds of data. A background thread continuously matches new scans against all finished submaps. When it finds a match (a **loop closure**), it adds a constraint to a pose graph and runs Sparse Pose Adjustment (SPA) to globally optimize all poses.
 
 ### Docker Build
 
@@ -104,7 +113,7 @@ The offline SLAM processed all 5 bags (~285 seconds of data) in approximately 2 
 
 ### Reference Poses
 
-The RELLIS-3D paper (Jiang et al., RA-L 2021) states: *"we first register and loop close the sequences using a SLAM system [Cartographer] and output each scan's position based on the SLAM results."* The dataset ships these as `poses.txt` in KITTI format — 2847 poses, one per LiDAR frame. I verified my Cartographer run by extracting 576 poses from bag 00 and confirming they match the overall trajectory shape.
+The RELLIS-3D paper [5] states: *"we first register and loop close the sequences using a SLAM system [Cartographer] and output each scan's position based on the SLAM results."* The dataset ships these as `poses.txt` in KITTI format — 2847 poses, one per LiDAR frame. I verified my Cartographer run by extracting 576 poses from bag 00 and confirming they match the overall trajectory shape.
 
 For the full-sequence comparison, I use the dataset's official Cartographer poses as the reference trajectory.
 
@@ -114,7 +123,7 @@ For the full-sequence comparison, I use the dataset's official Cartographer pose
 
 ### Umeyama Alignment
 
-GPS, ICP, and Cartographer each produce trajectories in different coordinate frames (ENU, sensor-local, SLAM-local). Before computing error metrics, I align them using Umeyama's closed-form method (Umeyama, IEEE PAMI 1991):
+GPS, ICP, and Cartographer each produce trajectories in different coordinate frames (ENU, sensor-local, SLAM-local). Before computing error metrics, the trajectories need to be aligned. I implemented Umeyama's closed-form least-squares alignment [4]:
 
 1. Center both point sets: $$\mathbf{p}_c = \mathbf{p} - \boldsymbol{\mu}_p$$, $$\mathbf{q}_c = \mathbf{q} - \boldsymbol{\mu}_q$$
 2. Source variance: $$\sigma^2_p = \frac{1}{N} \sum \|\mathbf{p}_{c,i}\|^2$$
@@ -129,7 +138,7 @@ This is the same SVD-based alignment as RANSAC ground plane refinement in P1-M2 
 
 ### ATE and RPE
 
-Following Sturm et al. (IROS 2012):
+Following the definitions in [2]:
 
 **Absolute Trajectory Error (ATE)**: After Umeyama alignment, compute the per-frame error:
 
@@ -182,7 +191,7 @@ ATE spikes to 2.0–2.5m in this section. The camera images show the trail narro
 
 ![GPS Transition Failure](assets/failure_gps_transition_300_500.gif)
 
-A transient ~2.2m ATE spike during a terrain transition zone, likely caused by a momentary HDOP increase as the satellite geometry changes.
+A transient ~2.2m ATE spike during a terrain transition zone. The likely cause is a spike in HDOP (Horizontal Dilution of Precision) — a measure of how spread out the visible GPS satellites are in the sky. When satellites cluster together (poor geometry), the position fix degrades. Terrain transitions between open field and tree cover can cause satellites to drop in and out of view, momentarily worsening the geometry. The ATE plot shows the spike is sharp and recovers within ~200 frames, consistent with a transient satellite visibility change rather than sustained multipath.
 
 ### ICP Drift on Featureless Terrain (Frames 2400–2847)
 
@@ -198,6 +207,32 @@ ATE grows from 0.3m to 0.8m in the final section. The camera shows wide-open gra
 
 ---
 
+## Source Code
+
+| File | Purpose |
+|------|---------|
+| `scripts/extract_poses_gps.py` | GPS/IMU extraction from ROS1 bags, ENU conversion, timestamp association |
+| `scripts/run_kiss_icp.py` | Custom RELLIS-3D data loader + KISS-ICP pipeline runner |
+| `scripts/compare_odometry.py` | Umeyama alignment, ATE/RPE computation, trajectory plots |
+| `scripts/extract_poses_cartographer.py` | KITTI/pbstream pose extraction to CSV |
+| `scripts/generate_bev_gif.py` | Camera + BEV accumulation GIF generator |
+| `scripts/run_cartographer_offline.sh` | Cartographer Docker SLAM runner |
+| `docker/Dockerfile.cartographer` | ROS Kinetic + unmannedlab/cartographer build |
+| `docker/offline_headless.launch` | Headless launch file for Docker (no RViz) |
+| `tests/python/test_odometry.py` | 15 tests: ENU, Umeyama, ATE, RPE, CSV format, timestamps |
+
+---
+
+## What I'd Do Differently
+
+**Use the merged rosbag for Cartographer.** The 5 split bags have inconsistent TF frame names between bags (bag 00 uses `os1_cloud_node`, bag 01 uses `ouster1/os1_lidar`). This caused the `cartographer_output_pose` tool to crash when replaying TFs across bag boundaries. The RELLIS-3D dataset provides a 23 GB merged bag with a single consistent TF tree — using that from the start would have avoided hours of debugging the pose extraction. The SLAM itself ran correctly on split bags; only the extraction tool had the TF issue.
+
+**Add per-point timestamps for KISS-ICP deskewing.** The RELLIS-3D `.bin` files don't include per-point timestamps, so KISS-ICP skips motion compensation (deskewing). On a vehicle bouncing on off-road terrain at 5 m/s, the Ouster OS1 travels ~0.5m during a single 100ms scan rotation. Without deskewing, trees appear slightly smeared. KISS-ICP supports deskewing via per-point timestamps [1] — extracting these from the raw rosbag PointCloud2 messages (which do have per-point timing) would improve registration quality, particularly on the rougher trail sections.
+
+**Interpolate between GPS/IMU readings instead of nearest-neighbor.** The current implementation picks the closest GPS reading to each LiDAR timestamp. At 150 Hz GPS and 10 Hz LiDAR, the worst-case mismatch is ~3.3ms — small enough in practice. But linear interpolation between the two nearest GPS readings would produce smoother trajectories and eliminate the ~17cm frame-to-frame jitter visible in the RPE plot, some of which is association noise rather than true GPS error.
+
+---
+
 ## What Comes Next
 
 The failure modes documented here motivate P2-M2: a custom LiDAR-Inertial SLAM system. By adding IMU pre-integration (smooths motion between frames), GPS factors (anchors absolute position in open areas), Scan Context loop closure detection (catches revisits), and g2o pose graph optimization (corrects drift globally), we aim to close the gap between raw ICP and full SLAM — and benchmark against the Cartographer result shown here.
@@ -206,11 +241,15 @@ The failure modes documented here motivate P2-M2: a custom LiDAR-Inertial SLAM s
 
 ## References
 
-- Vizzo et al., "KISS-ICP: In Defense of Point-to-Point ICP," RA-L 2023
-- Sturm et al., "A Benchmark for the Evaluation of RGB-D SLAM Systems," IROS 2012
-- Hess et al., "Real-Time Loop Closure in 2D LiDAR SLAM," ICRA 2016
-- Umeyama, "Least-Squares Estimation of Transformation Parameters Between Two Point Patterns," IEEE PAMI 1991
-- Jiang et al., "RELLIS-3D Dataset: Data, Benchmarks and Analysis," RA-L 2021
+[1] Vizzo et al., "KISS-ICP: In Defense of Point-to-Point ICP," IEEE RA-L, 2023.
+
+[2] Sturm et al., "A Benchmark for the Evaluation of RGB-D SLAM Systems," IROS, 2012.
+
+[3] Hess et al., "Real-Time Loop Closure in 2D LiDAR SLAM," ICRA, 2016.
+
+[4] Umeyama, "Least-Squares Estimation of Transformation Parameters Between Two Point Patterns," IEEE PAMI, 1991.
+
+[5] Jiang et al., "RELLIS-3D Dataset: Data, Benchmarks and Analysis," IEEE RA-L, 2021.
 
 ---
 
