@@ -54,7 +54,29 @@ target_link_libraries(hungarian Eigen3::Eigen)
 add_library(sort_tracker src/sort_tracker.cpp)
 target_link_libraries(sort_tracker kalman_filter hungarian Eigen3::Eigen)
 
-option(BUILD_ROS2_NODES "Build ROS2 nodes" OFF)   
+# --- Phase 2-M2: SLAM libraries (from scratch) ---
+
+add_library(so3 src/so3.cpp)
+target_link_libraries(so3 Eigen3::Eigen)
+
+add_library(imu_preintegration src/imu_preintegration.cpp)
+target_link_libraries(imu_preintegration so3 Eigen3::Eigen)
+
+add_library(scan_context src/scan_context.cpp)
+target_link_libraries(scan_context Eigen3::Eigen)
+
+add_library(pose_graph_slam src/pose_graph_slam.cpp)
+target_link_libraries(pose_graph_slam so3 imu_preintegration Eigen3::Eigen)
+
+add_executable(slam_runner src/slam_runner.cpp)
+target_link_libraries(slam_runner pose_graph_slam scan_context imu_preintegration so3 point_cloud_loader g2o_wrapper Eigen3::Eigen)
+
+add_library(g2o_wrapper src/g2o_wrapper.cpp)
+target_link_libraries(g2o_wrapper pose_graph_slam Eigen3::Eigen
+    g2o_core g2o_types_slam3d g2o_solver_eigen g2o_stuff fmt)
+target_include_directories(g2o_wrapper PUBLIC /usr/local/include)
+
+option(BUILD_ROS2_NODES "Build ROS2 nodes" OFF)
 # --- ROS2 nodes (wrappers around core libs) ---
 if(BUILD_ROS2_NODES)
     add_executable(ground_seg_node ros2_nodes/ground_seg_node.cpp)
@@ -107,8 +129,21 @@ if(BUILD_TESTING)
     ament_add_gtest(test_hungarian tests/cpp/test_hungarian.cpp)
     target_link_libraries(test_hungarian hungarian)
 
-    ament_add_gtest(test_loader tests/cpp/test_loader.cpp WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})  
+    ament_add_gtest(test_loader tests/cpp/test_loader.cpp WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     target_link_libraries(test_loader point_cloud_loader)
+
+    # Phase 2-M2 tests
+    ament_add_gtest(test_so3 tests/cpp/test_so3.cpp)
+    target_link_libraries(test_so3 so3)
+
+    ament_add_gtest(test_imu_preintegration tests/cpp/test_imu_preintegration.cpp)
+    target_link_libraries(test_imu_preintegration imu_preintegration so3)
+
+    ament_add_gtest(test_scan_context tests/cpp/test_scan_context.cpp)
+    target_link_libraries(test_scan_context scan_context)
+
+    ament_add_gtest(test_pose_graph_slam tests/cpp/test_pose_graph_slam.cpp)
+    target_link_libraries(test_pose_graph_slam pose_graph_slam so3 imu_preintegration)
 endif()
 
 if(BUILD_ROS2_NODES)
