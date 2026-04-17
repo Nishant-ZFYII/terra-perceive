@@ -384,6 +384,10 @@ No measurable effect. ICP edges dominate; the VN-300's gyro bias is essentially 
 | `include/g2o_wrapper.hpp`, `src/g2o_wrapper.cpp` | g2o adapter for cross-validation — same edges, different solver |
 | `src/slam_runner.cpp` | CLI binary: loads data, builds graph, runs optimizer, saves trajectory |
 
+**Scripts:** `scripts/extract_imu.py`, `scripts/plot_ablation.py`, `scripts/animate_forster_style.py`
+
+**Tests:** `tests/cpp/test_so3.cpp`, `tests/cpp/test_imu_preintegration.cpp`, `tests/cpp/test_scan_context.cpp`, `tests/cpp/test_pose_graph_slam.cpp`
+
 ---
 
 ## What I'd Improve
