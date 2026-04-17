@@ -383,13 +383,6 @@ No measurable effect. ICP edges dominate; the VN-300's gyro bias is essentially 
 | `include/pose_graph_slam.hpp`, `src/pose_graph_slam.cpp` | Pose graph with 4 edge types, analytical Jacobians, on-manifold LM, Euclidean baseline |
 | `include/g2o_wrapper.hpp`, `src/g2o_wrapper.cpp` | g2o adapter for cross-validation — same edges, different solver |
 | `src/slam_runner.cpp` | CLI binary: loads data, builds graph, runs optimizer, saves trajectory |
-| `scripts/extract_imu.py` | ROS1 rosbag IMU extraction to CSV (VectorNav VN-300, 50 Hz) |
-| `scripts/plot_ablation.py` | Generates all ablation plots, ATE table, trajectory comparisons |
-| `scripts/animate_forster_style.py` | Split-view SLAM demo video (RGB camera + 3D accumulated map) |
-| `tests/cpp/test_so3.cpp` | 15 tests: roundtrips, cross-product identity, perturbation consistency |
-| `tests/cpp/test_imu_preintegration.cpp` | 12 tests: bias estimation, update order, covariance growth, batch |
-| `tests/cpp/test_scan_context.cpp` | 12 tests: descriptor dims, cosine distance, shift recovery, min-gap |
-| `tests/cpp/test_pose_graph_slam.cpp` | 16 tests: residuals, Jacobians vs numerical, convergence, manifold validity |
 
 ---
 
