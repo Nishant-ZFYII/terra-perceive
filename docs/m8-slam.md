@@ -12,11 +12,11 @@ date: 2026-04-17
 
 *Part of the Terra Perceive series — Phase 2, Milestone 2.*
 
-In P2-M1, I benchmarked three odometry sources — GPS, KISS-ICP, and Cartographer — and found that KISS-ICP achieves 0.58m ATE on the RELLIS-3D off-road sequence while GPS degrades to 1.51m under tree canopy. Cartographer wins by running loop closure and pose graph optimization, but it is a black box: I cannot modify its internals, tune its information matrices, or explain its convergence behavior on a whiteboard.
+In P2-M1, I benchmarked three odometry sources — GPS, KISS-ICP, and Cartographer — and found that KISS-ICP achieves 0.58m ATE on the RELLIS-3D off-road sequence while GPS degrades to 1.51m under tree canopy. The next question: can I build a SLAM system that fuses all three signals and learn the math end-to-end while doing it?
 
-This milestone builds a complete LiDAR-Inertial SLAM system from scratch — SO(3) Lie group primitives, IMU preintegration on the manifold, Scan Context loop closure detection, and a unified pose graph optimizer with Levenberg-Marquardt — then benchmarks every component against both KISS-ICP and Google Cartographer.
+This milestone builds a complete LiDAR-Inertial SLAM system from scratch — SO(3) Lie group primitives, IMU preintegration on the manifold, Scan Context loop closure detection, and a unified pose graph optimizer with Levenberg-Marquardt. The optimizer runs on the SE(3) manifold using analytical Jacobians and Eigen's sparse Cholesky solver — no g2o, no GTSAM, no black boxes in the optimization loop. Cartographer is used throughout as the alignment reference for ATE computation, not as a direct benchmark target.
 
-The system is approximately 2400 lines of C++ across 15 files, tested by 120 unit tests. The optimizer runs on the SE(3) manifold using analytical Jacobians and Eigen's sparse Cholesky solver — no g2o, no GTSAM, no black boxes in the optimization loop.
+**The honest headline result: on this 285-second open-loop trajectory, the best configuration is ICP + IMU alone at 0.577m ATE.** Adding GPS degrades the trajectory because GPS noise (1.51m) exceeds KISS-ICP drift (0.58m) — the pose graph correctly compromises between the two, and any weight on GPS moves the answer away from the optimum. This is not a failure of the system; it is the regime where GPS fusion does not help, and the value of building the pipeline is everything this post then unpacks about *why*.
 
 ---
 
@@ -176,7 +176,7 @@ Cosine distance is $$1 - \cos\theta$$, where $$\theta$$ is the angle between two
 
 The naive implementation compares every query frame against all previous frames — $$O(N^2)$$ total comparisons. For 2847 frames with 60 shifts each, this means ~500 billion operations. It ran for hours before I added spatial pre-filtering: only compare frames whose KISS-ICP positions are within 20m. This cut the candidates by 95%+ while preserving all true matches.
 
-On RELLIS-3D sequence 00 (open-loop, no revisits), Scan Context correctly detected **zero loop closures with zero false positives**. The real test will come on nuScenes, where the vehicle revisits intersections.
+On RELLIS-3D sequence 00 (open-loop, no revisits), Scan Context correctly detected **zero loop closures with zero false positives**.
 
 12 unit tests cover descriptor construction, cosine distance properties, column-shift recovery, min-gap filtering, and threshold rejection.
 
@@ -233,7 +233,7 @@ Fixed poses (the anchor at frame 0) are handled by adding $$10^{12}$$ to their d
 ![Convergence](assets/convergence_curve.png)
 *Levenberg-Marquardt convergence on the full RELLIS-3D graph (2847 poses, 8500+ edges). Cost drops from 194,000 to 1.86 — five orders of magnitude — in 20 iterations. The first 4 iterations are cautious (λ rising), then iteration 5 finds a breakthrough step.*
 
-On the RELLIS-3D graph (8500+ edges), the cost drops from 194,000 to 1.86 in 20 iterations. The first 4 iterations are cautious ($$\lambda$$ rising, cost barely moving), then iteration 5 finds a breakthrough step that drops cost by 35×. After iteration 7, the optimizer is fine-tuning in the basin of convergence.
+On the RELLIS-3D graph (8500+ edges), the cost drops from 194,000 to 1.86 in 20 iterations. The first 4 iterations are cautious ($$\lambda$$ rising, cost barely moving), then iteration 5 finds a breakthrough step that drops cost by 35×.
 
 16 unit tests cover graph assembly, residual zero-at-ground-truth, Jacobian validation, convergence, fixed anchor invariance, GPS pull, loop closure ATE reduction, and manifold/Euclidean retraction validity.
 
@@ -300,7 +300,7 @@ Pose graph optimization distributes error — it cannot create accuracy from not
 - **Short trajectory (285s, ~200m)**: ICP drift = 0.58m < GPS noise = 1.51m → GPS hurts
 - **Long trajectory (10km urban loop)**: ICP drift = 10–20m > GPS noise = 1–2m → GPS helps
 
-The RELLIS-3D sequence is simply too short for GPS to be useful. On nuScenes (longer urban trajectories with better GPS), I expect the full system to show monotonic improvement.
+The RELLIS-3D sequence is simply too short for GPS to be useful.
 
 ---
 
@@ -345,7 +345,7 @@ The 14% gap between custom manifold and g2o is attributed to information matrix 
 | Zero ($$b = 0$$) | 0.577 |
 | Static (empirical) | 0.577 |
 
-No measurable effect. ICP edges dominate; the VN-300's gyro bias is essentially zero ($$2.7 \times 10^{-5}$$ rad/s).
+No measurable effect on this dataset — ICP edges dominate and the VN-300's gyro bias is essentially zero ($$2.7 \times 10^{-5}$$ rad/s). Bias estimation was built as infrastructure for regimes where IMU weight matters more than ICP (long trajectories with degraded scan matching, or loop-rich environments where IMU-vs-ICP disagreement is meaningful). The code and tests are in place; the behaviour will become visible when the operating regime changes.
 
 ---
 
@@ -401,6 +401,12 @@ No measurable effect. ICP edges dominate; the VN-300's gyro bias is essentially 
 **Implement ring-key pre-filtering for Scan Context.** Kim and Kim [3] describe a ring-key KD-tree that reduces loop candidate retrieval from $$O(N)$$ to $$O(\log N)$$ — essential for real-time operation on long trajectories.
 
 **Evaluate on nuScenes.** RELLIS-3D sequence 00 is a short open-loop trajectory where KISS-ICP already performs well. nuScenes provides longer urban loops with revisits and better GPS — the regime where this multi-sensor SLAM system is expected to demonstrate clear improvement over odometry alone.
+
+---
+
+## Summary
+
+Built a from-scratch on-manifold LiDAR-inertial pose graph optimizer with four edge types, analytical Jacobians validated against numerical, and a Euclidean baseline for controlled comparison. The on-manifold retraction is 166% more accurate than Euclidean+SVD on this graph — empirical evidence for why Forster et al. work in $$SE(3)$$. The best configuration on RELLIS-3D is ICP + IMU alone (0.577m ATE); GPS degrades performance because this trajectory is too short for accumulated odometry drift to exceed GPS noise — the regime where multi-sensor fusion helps begins at longer trajectories and looser odometry than we have here.
 
 ---
 
