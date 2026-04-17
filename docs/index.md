@@ -35,7 +35,7 @@ Phase 1 handles single frames. Phase 2 adds the temporal dimension — where is 
 | Milestone | Implementation | Status |
 |-----------|----------------|--------|
 | [M7: Triple Odometry](m7-odometry) | GPS/IMU extraction, KISS-ICP, Cartographer benchmark, ATE/RPE comparison | Completed |
-| M8: LiDAR-Inertial SLAM | Scan Context loop closure, IMU pre-integration, GPS factors, g2o pose graph | Planned |
+| [M8: LiDAR-Inertial SLAM](m8-slam) | From-scratch pose graph optimizer, IMU preintegration, Scan Context, manifold vs Euclidean ablation | Completed |
 
 ### Mapping & Tracking
 

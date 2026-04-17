@@ -170,7 +170,7 @@ $$d(A, B, s) = \frac{1}{N_{\text{valid}}} \sum_{c} \left(1 - \frac{A_c \cdot B_{
 Cosine distance is $$1 - \cos\theta$$, where $$\theta$$ is the angle between two column vectors. When vectors point in the same direction, $$\cos\theta = 1$$, so $$d = 0$$. When vectors point in *opposite* directions, $$\cos\theta = -1$$, so $$d = 2$$. This happens when one column has positive heights and the other has negative heights at the same bins — physically unlikely but mathematically possible. In practice, since heights are always positive (max-z is ≥ 0), cosine similarity is bounded by $$[0, 1]$$ and the effective distance range is $$[0, 1]$$ for our data. Kim and Kim [3] use a threshold of 0.1–0.3 for loop detection.
 
 ![Scan Context Matching](assets/scan_context_matching.png)
-*Column-shift alignment for rotation-invariant matching. Figure from Kim and Kim [3].*
+*Column-shift alignment for rotation-invariant matching. The query descriptor (top) is shifted against each candidate. The shift yielding minimum cosine distance recovers the yaw offset between revisits. Figure from Kim and Kim [3].*
 
 ### Performance and the O(N²) problem
 
@@ -231,7 +231,7 @@ Fixed poses (the anchor at frame 0) are handled by adding $$10^{12}$$ to their d
 ### Convergence
 
 ![Convergence](assets/convergence_curve.png)
-*LM convergence on the full RELLIS-3D graph. Cost drops 100,000× in 20 iterations.*
+*Levenberg-Marquardt convergence on the full RELLIS-3D graph (2847 poses, 8500+ edges). Cost drops from 194,000 to 1.86 — five orders of magnitude — in 20 iterations. The first 4 iterations are cautious (λ rising), then iteration 5 finds a breakthrough step.*
 
 On the RELLIS-3D graph (8500+ edges), the cost drops from 194,000 to 1.86 in 20 iterations. The first 4 iterations are cautious ($$\lambda$$ rising, cost barely moving), then iteration 5 finds a breakthrough step that drops cost by 35×. After iteration 7, the optimizer is fine-tuning in the basin of convergence.
 
@@ -318,9 +318,10 @@ The RELLIS-3D sequence is simply too short for GPS to be useful. On nuScenes (lo
 | E | Full | 1.307 | GPS still dominates |
 
 ![Ablation Bar Chart](assets/ablation_bar_chart.png)
+*Edge type and optimizer ablation. Configs A–C achieve the ICP baseline (0.577m). Adding GPS (D, E) degrades ATE because GPS noise exceeds ICP drift. The Euclidean optimizer is 166% worse than manifold on the same graph.*
 
 ![GPS Weight vs Frame](assets/gps_weight_vs_frame.png)
-*HDOP-weighted GPS information. Weight drops 40× under canopy (frames 1800–2200).*
+*HDOP-weighted GPS information matrix weight per frame. Under canopy (frames 1800–2200, red), weight drops 40× to avoid trusting degraded GPS. Featureless terrain (frames 2400+, blue) gets moderate downweighting.*
 
 ### Optimizer ablation
 
@@ -331,6 +332,7 @@ The RELLIS-3D sequence is simply too short for GPS to be useful. On nuScenes (lo
 | Custom (Euclidean) | 3.962 | Additive R + SVD reproject |
 
 ![Optimizer Comparison](assets/optimizer_comparison.png)
+*Three optimizers on the same graph, Umeyama-aligned to Cartographer. Manifold (green, 1.49m) and g2o (orange, 1.28m) produce similar trajectories. Euclidean (red, 3.96m) visibly diverges — the SVD reprojection cannot compensate for accumulated rotation errors.*
 
 The Euclidean optimizer is **166% worse** than manifold. The SVD reprojection after each additive rotation update loses accuracy proportional to $$\|\delta\phi\|^2$$ per step — compounding over 20 iterations into a 2.5m trajectory degradation.
 
@@ -367,7 +369,7 @@ No measurable effect. ICP edges dominate; the VN-300's gyro bias is essentially 
 ### Trajectory Growing Animation
 
 ![Trajectory Animation](assets/trajectory_animation.gif)
-*Frame-by-frame trajectory comparison. All sources Umeyama-aligned to Cartographer (black dashed).*
+*Frame-by-frame trajectory comparison. All sources Umeyama-aligned to Cartographer (black dashed). GPS (red) jitters throughout due to multipath noise. ICP (blue) drifts subtly at the end on featureless terrain. SLAM (green) tracks the GPS-influenced compromise — closer to GPS than to ICP, which is worse in this case.*
 
 ---
 
