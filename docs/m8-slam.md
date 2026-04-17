@@ -12,11 +12,11 @@ date: 2026-04-17
 
 *Part of the Terra Perceive series — Phase 2, Milestone 2.*
 
-In P2-M1, I benchmarked three odometry sources — GPS, KISS-ICP, and Cartographer — and found that KISS-ICP achieves 0.58m ATE on the RELLIS-3D off-road sequence while GPS degrades to 1.51m under tree canopy. The next question: can I build a SLAM system that fuses all three signals and learn the math end-to-end while doing it?
+In P2-M1, I benchmarked three odometry sources — GPS, KISS-ICP, and Cartographer — and found that KISS-ICP achieves 0.58m ATE on the RELLIS-3D off-road sequence while GPS degrades to 1.51m under tree canopy. The next question: can a from-scratch multi-sensor pose graph beat KISS-ICP alone?
 
-This milestone builds a complete LiDAR-Inertial SLAM system from scratch — SO(3) Lie group primitives, IMU preintegration on the manifold, Scan Context loop closure detection, and a unified pose graph optimizer with Levenberg-Marquardt. The optimizer runs on the SE(3) manifold using analytical Jacobians and Eigen's sparse Cholesky solver — no g2o, no GTSAM, no black boxes in the optimization loop. Cartographer is used throughout as the alignment reference for ATE computation, not as a direct benchmark target.
+This milestone builds a complete LiDAR-Inertial SLAM system from scratch — SO(3) Lie group primitives, IMU preintegration on the manifold, Scan Context loop closure detection, and a unified pose graph optimizer with Levenberg-Marquardt. The optimizer runs on the SE(3) manifold using analytical Jacobians and Eigen's sparse Cholesky solver. Production libraries (g2o, GTSAM) are used as validation references, not in the main optimization loop. Cartographer is used throughout as the alignment reference for ATE computation, not as a direct benchmark target.
 
-**The honest headline result: on this 285-second open-loop trajectory, the best configuration is ICP + IMU alone at 0.577m ATE.** Adding GPS degrades the trajectory because GPS noise (1.51m) exceeds KISS-ICP drift (0.58m) — the pose graph correctly compromises between the two, and any weight on GPS moves the answer away from the optimum. This is not a failure of the system; it is the regime where GPS fusion does not help, and the value of building the pipeline is everything this post then unpacks about *why*.
+**The honest headline result: on this 285-second open-loop trajectory, the best configuration is ICP + IMU alone at 0.577m ATE.** Adding GPS degrades the trajectory because GPS noise (1.51m) exceeds KISS-ICP drift (0.58m) — the pose graph correctly compromises between the two, and any weight on GPS moves the answer away from the optimum.
 
 ---
 
@@ -36,7 +36,7 @@ Each factor type connects to the graph differently:
 | GPS Position | ENU coordinates, HDOP-weighted | **Unary** (constrains a single pose) | 3D | 2847 |
 | Loop Closure | Scan Context descriptor matching [3] | **Binary** (connects distant poses $$i$$ to $$j$$) | 6D | 0 |
 
-Binary edges relate two poses to each other through a relative measurement. Unary edges constrain a single pose against an absolute reference. The GPS edge is unary because it says "this pose should be near this GPS reading" — it does not relate two poses to each other. Loop closure edges are binary but connect temporally distant poses, which is what makes them powerful for drift correction.
+Loop closure edges are binary but connect temporally distant poses — this is what makes them powerful for drift correction.
 
 ---
 
@@ -59,7 +59,7 @@ $$R_i \leftarrow R_i \cdot \text{Exp}(\delta\phi_i), \quad t_i \leftarrow t_i + 
 
 This is a first-order Taylor expansion of the exponential map. For small perturbations (near convergence), the linearization is accurate. For large perturbations (early iterations), manifold retraction still produces a valid rotation — unlike the Euclidean alternative, which drifts off SO(3).
 
-15 unit tests verify roundtrip properties ($$\text{Exp}(\text{Log}(R)) = R$$), cross-product identity, orthogonality preservation, and Jr perturbation consistency (Forster Eq. 7).
+Tests verify roundtrip properties ($$\text{Exp}(\text{Log}(R)) = R$$), cross-product identity, orthogonality preservation, and Jr perturbation consistency (Forster Eq. 7).
 
 ---
 
@@ -141,7 +141,7 @@ The $$A$$ matrix (9×9 state transition) uses the single-step rotation $$\text{E
 
 The gyro bias is essentially zero — the VN-300 is well-calibrated. The accelerometer XY bias (~0.18 m/s²) is consistent with a mounting offset on the Warthog platform.
 
-12 unit tests cover bias estimation, zero-input identity, constant rotation/acceleration, covariance growth, update order, and batch trajectory preintegration.
+Tests cover bias estimation, zero-input identity, constant rotation/acceleration, covariance growth, update order, and batch trajectory preintegration.
 
 ---
 
@@ -165,9 +165,9 @@ If the vehicle revisits a location facing 90° to the right, every point's atan2
 
 $$d(A, B, s) = \frac{1}{N_{\text{valid}}} \sum_{c} \left(1 - \frac{A_c \cdot B_{(c+s) \bmod 60}}{\|A_c\| \cdot \|B_{(c+s) \bmod 60}\|}\right)$$
 
-### Why the distance range is [0, 2], not [0, 1]
+### Distance range
 
-Cosine distance is $$1 - \cos\theta$$, where $$\theta$$ is the angle between two column vectors. When vectors point in the same direction, $$\cos\theta = 1$$, so $$d = 0$$. When vectors point in *opposite* directions, $$\cos\theta = -1$$, so $$d = 2$$. This happens when one column has positive heights and the other has negative heights at the same bins — physically unlikely but mathematically possible. In practice, since heights are always positive (max-z is ≥ 0), cosine similarity is bounded by $$[0, 1]$$ and the effective distance range is $$[0, 1]$$ for our data. Kim and Kim [3] use a threshold of 0.1–0.3 for loop detection.
+Cosine distance is bounded by $$[0, 2]$$ in general. Since heights are non-negative, the effective range is $$[0, 1]$$ for our data — Kim and Kim [3] use a threshold of 0.1–0.3 for loop detection.
 
 ![Scan Context Matching](assets/scan_context_matching.png)
 *Column-shift alignment for rotation-invariant matching. The query descriptor (top) is shifted against each candidate. The shift yielding minimum cosine distance recovers the yaw offset between revisits. Figure from Kim and Kim [3].*
@@ -178,7 +178,7 @@ The naive implementation compares every query frame against all previous frames 
 
 On RELLIS-3D sequence 00 (open-loop, no revisits), Scan Context correctly detected **zero loop closures with zero false positives**.
 
-12 unit tests cover descriptor construction, cosine distance properties, column-shift recovery, min-gap filtering, and threshold rejection.
+Tests cover descriptor construction, cosine distance properties, column-shift recovery, min-gap filtering, and threshold rejection.
 
 ---
 
@@ -194,7 +194,7 @@ $$r_{\text{rot}} = \text{Log}(\Delta R_{\text{meas}}^\top \cdot R_i^\top R_j)$$
 
 $$r_{\text{trans}} = R_i^\top(t_j - t_i) - \Delta p_{\text{meas}}$$
 
-The IMU residual additionally subtracts gravity's predicted contribution: $$R_i^\top(t_j - t_i - \frac{1}{2}g \Delta t^2)$$. Gravity enters the residual, not the preintegration — this is a subtle but important distinction from Forster Eq. 31 [2].
+The IMU residual additionally subtracts gravity's predicted contribution: $$R_i^\top(t_j - t_i - \frac{1}{2}g \Delta t^2)$$. Gravity enters the residual, not the preintegration itself — this matches Forster Eq. 31 [2] in spirit. The preintegrated $$\Delta p$$ stored in the IMU factor is a pure kinematic summary of the bias-corrected accelerometer readings, independent of world-frame gravity. Subtracting gravity later (at residual time) means the preintegrated values do not need to be recomputed when the global frame or gravity vector changes — the factor is reusable.
 
 **Unary edges** (GPS) — constrain a single pose:
 
@@ -231,11 +231,9 @@ Fixed poses (the anchor at frame 0) are handled by adding $$10^{12}$$ to their d
 ### Convergence
 
 ![Convergence](assets/convergence_curve.png)
-*Levenberg-Marquardt convergence on the full RELLIS-3D graph (2847 poses, 8500+ edges). Cost drops from 194,000 to 1.86 — five orders of magnitude — in 20 iterations. The first 4 iterations are cautious (λ rising), then iteration 5 finds a breakthrough step.*
+*Levenberg-Marquardt convergence on the full RELLIS-3D graph (2847 poses, 8500+ edges). Cost drops from 194,000 to 1.86 — five orders of magnitude — in 20 iterations. The first 4 iterations are cautious (λ rising), then iteration 5 finds a breakthrough step that drops cost by 35×.*
 
-On the RELLIS-3D graph (8500+ edges), the cost drops from 194,000 to 1.86 in 20 iterations. The first 4 iterations are cautious ($$\lambda$$ rising, cost barely moving), then iteration 5 finds a breakthrough step that drops cost by 35×.
-
-16 unit tests cover graph assembly, residual zero-at-ground-truth, Jacobian validation, convergence, fixed anchor invariance, GPS pull, loop closure ATE reduction, and manifold/Euclidean retraction validity.
+Tests cover graph assembly, residual zero-at-ground-truth, Jacobian validation, convergence, fixed anchor invariance, GPS pull, loop closure ATE reduction, and manifold/Euclidean retraction validity.
 
 ---
 
@@ -258,7 +256,7 @@ double t0_epoch = gps_timestamps[0] * 1e-9;
 lidar_times[i] = t0_epoch + icp_timestamps[i] * 1e-9;
 ```
 
-After this fix, the preintegrator correctly found ~5 IMU samples per LiDAR interval, and the cost dropped from NaN to 194,000 (finite, solvable).
+After this fix, the preintegrator correctly found 5 IMU samples per LiDAR interval (50 Hz / 10 Hz), and the cost dropped from NaN to 194,000 (finite, solvable).
 
 ### The zero-covariance gap
 
@@ -351,12 +349,16 @@ No measurable effect on this dataset — ICP edges dominate and the VN-300's gyr
 
 ## Per-Frame Error Analysis
 
+The per-frame view tells the same story as the ablation, but with the time axis visible: GPS error spikes under canopy (frames 1800–2200), ICP drifts on featureless terrain (2400+), and the SLAM trajectory traces the weighted compromise between them.
+
 ![Per-Frame ATE](assets/per_frame_ate.png)
 *Position error at each frame. GPS spikes under canopy (1800–2200). ICP drifts on featureless terrain (2400+). The SLAM trajectory shows the GPS-influenced compromise.*
 
 ---
 
 ## Trajectory Comparison
+
+Three views of the same data — a static bird's-eye overlay, a split-view video of the SLAM pipeline in action, and an animated frame-by-frame comparison.
 
 ![Four Trajectory Comparison](assets/four_trajectory_comparison.png)
 *All four trajectories Umeyama-aligned to Cartographer. GPS (red) visibly noisier. ICP (blue) and SLAM (green) track Cartographer closely.*
