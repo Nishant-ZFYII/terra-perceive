@@ -373,19 +373,23 @@ No measurable effect. ICP edges dominate; the VN-300's gyro bias is essentially 
 
 ---
 
-## What I Built
+## Source Code
 
-| Component | Files | LOC | Tests |
-|-----------|-------|-----|-------|
-| SO(3) Primitives | `so3.hpp/cpp` | ~120 | 15 |
-| IMU Preintegration | `imu_preintegration.hpp/cpp` | ~350 | 12 |
-| Scan Context | `scan_context.hpp/cpp` | ~200 | 12 |
-| Pose Graph SLAM | `pose_graph_slam.hpp/cpp` | ~800 | 16 |
-| g2o Wrapper | `g2o_wrapper.hpp/cpp` | ~170 | — |
-| SLAM Runner | `slam_runner.cpp` | ~230 | — |
-| IMU Extraction | `extract_imu.py` | ~70 | — |
-| Visualization | `plot_ablation.py`, `animate_*.py` | ~500 | — |
-| **Total** | **15 files** | **~2440** | **~120** |
+| File | Purpose |
+|------|---------|
+| `include/so3.hpp`, `src/so3.cpp` | SO(3) Lie group primitives — Exp, Log, Jr, Jr⁻¹, hat, vee |
+| `include/imu_preintegration.hpp`, `src/imu_preintegration.cpp` | IMU preintegration with covariance propagation, bias estimation, CSV I/O |
+| `include/scan_context.hpp`, `src/scan_context.cpp` | Scan Context descriptor construction, column-shift matching, loop detection |
+| `include/pose_graph_slam.hpp`, `src/pose_graph_slam.cpp` | Pose graph with 4 edge types, analytical Jacobians, on-manifold LM, Euclidean baseline |
+| `include/g2o_wrapper.hpp`, `src/g2o_wrapper.cpp` | g2o adapter for cross-validation — same edges, different solver |
+| `src/slam_runner.cpp` | CLI binary: loads data, builds graph, runs optimizer, saves trajectory |
+| `scripts/extract_imu.py` | ROS1 rosbag IMU extraction to CSV (VectorNav VN-300, 50 Hz) |
+| `scripts/plot_ablation.py` | Generates all ablation plots, ATE table, trajectory comparisons |
+| `scripts/animate_forster_style.py` | Split-view SLAM demo video (RGB camera + 3D accumulated map) |
+| `tests/cpp/test_so3.cpp` | 15 tests: roundtrips, cross-product identity, perturbation consistency |
+| `tests/cpp/test_imu_preintegration.cpp` | 12 tests: bias estimation, update order, covariance growth, batch |
+| `tests/cpp/test_scan_context.cpp` | 12 tests: descriptor dims, cosine distance, shift recovery, min-gap |
+| `tests/cpp/test_pose_graph_slam.cpp` | 16 tests: residuals, Jacobians vs numerical, convergence, manifold validity |
 
 ---
 
