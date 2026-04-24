@@ -49,6 +49,11 @@
 #include "so3.hpp"
 #include "imu_preintegration.hpp"
 
+// Forward declaration — avoids pulling <g2o/core/sparse_optimizer.h> into every
+// translation unit that includes this header. The full include is needed only
+// in src/pose_graph_slam.cpp where computeMarginalsG2O is defined.
+namespace g2o { class SparseOptimizer; }
+
 namespace pose_graph {
 
 // Gravity in world frame (z-up, ENU convention). Used by IMU factor residual.
@@ -267,4 +272,38 @@ std::pair<std::vector<Pose>, std::vector<double>> loadPosesFromCSV(const std::st
 void savePosesToCSV(const std::vector<Pose>& poses,
                     const std::string& path);
 
+// -----------------------------------------------------------------------------                                                                                          
+// Per-pose marginal covariance extraction (added for P2-M3)
+// -----------------------------------------------------------------------------                                                                                          
+//
+// Layout convention (document and stay consistent everywhere):                                                                                                           
+//   6x6 block = [ P_rotation_3x3     0         ]                                                                                                                         
+//               [     0          P_translation_3x3 ]                                                                                                                     
+//   — OR —                                                                                                                                                               
+//   g2o SE3Quat uses [trans | rot]; permute on extraction if you keep rot-first.                                                                                         
+//                                                                                                                                                                        
+// Used by P2-M3 world-grid confidence scaling:                                                                                                                           
+//   pose_sigma = sqrt(trace(P_translation))                                                                                                                              
+//   confidence_adjusted = confidence_raw * exp(-k * pose_sigma)                                                                                                          
+// -----------------------------------------------------------------------------                                                                                          
+                                                                                                                                                                        
+// Production path — true marginal via g2o::SparseOptimizer::computeMarginals                                                                                             
+// (Schur-complement inverse of the block-diagonal of H^-1).
+// Requires: graph has been optimized; optimizer still holds the factorization.                                                                                           
+std::vector<Eigen::Matrix<double, 6, 6>> computeMarginalsG2O(                                                                                                             
+    g2o::SparseOptimizer& optimizer, int num_poses);                                                                                                                                     
+                                                                                                                                                                        
+// Heuristic path — sum of incident-edge information matrices, then invert.                                                                                               
+// Biased: ignores correlations induced by non-adjacent (loop-closure) edges.                                                                                             
+// Ablation-only baseline against computeMarginalsG2O.                                                                                                                    
+std::vector<Eigen::Matrix<double, 6, 6>> computeEdgeInformationSum(
+    const PoseGraphSLAM& graph, int num_poses);                                                                                                                           
+                                                                                                                                                                        
+// Utility: pose_sigma = sqrt(trace(P_translation_block)).                                                                                                                
+double poseSigmaFromCovariance(const Eigen::Matrix<double, 6, 6>& P);
+                                                                                                                                                                        
+// Convenience: dump covariances to CSV for accumulator_runner.                                                                                                           
+//   Schema: frame_id, P00, P01, ..., P55   (36 doubles per row, row-major)                                                                                               
+bool saveCovariancesToCSV(const std::vector<Eigen::Matrix<double, 6, 6>>& covs,                                                                                           
+                        const std::string& path);    
 }  // namespace pose_graph

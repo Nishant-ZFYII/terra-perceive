@@ -12,9 +12,9 @@ services:
       dockerfile: docker/Dockerfile.perception
     volumes:
       - ../output:/ws/src/construction_perception/output
-    # Phase 2 services below — uncomment when ready
-    # depends_on:
-    #   - nats
+    # Phase 2 services
+    depends_on:
+      - nats
 
   # --- Cartographer SLAM (P2-M1.3) ---
   # Only runs when explicitly invoked with --profile cartographer
@@ -29,13 +29,18 @@ services:
       - ../data:/output
     network_mode: host
 
-  # --- Phase 2 (disabled for Phase 1) ---
-  # nats:
-  #   image: nats:latest
-  #   ports:
-  #     - "4222:4222"
-  #     - "8222:8222"
-  #   command: ["--jetstream"]
+  # --- Phase 2 ---
+  nats:
+    image: nats:latest
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - ./nats.conf:/etc/nats/nats.conf:ro
+    # max_payload (16 MB, vs default 1 MB) is set in nats.conf, not CLI —
+    # the server only accepts it via config file. JetStream on for future
+    # durable subjects.
+    command: ["-c", "/etc/nats/nats.conf"]
   #
   # ml-inference:
   #   build:

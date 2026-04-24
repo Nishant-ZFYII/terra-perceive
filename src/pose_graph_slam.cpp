@@ -268,9 +268,13 @@ void savePosesToCSV(const std::vector<Pose>& poses,
 #include <Eigen/SparseCholesky>
 #include <cmath>
 #include <fstream>
+#include <initializer_list>
 #include <iostream>
 #include <sstream>
-
+#include <unordered_map>
+#include <g2o/core/sparse_optimizer.h>                                                                                                                                  
+#include <g2o/core/sparse_block_matrix.h> 
+#include <unordered_map>
 namespace pose_graph {
 
 // -----------------------------------------------------------------------------
@@ -963,54 +967,282 @@ void PoseGraphSLAM::retract(const Eigen::VectorXd& dx) {
 // CSV I/O
 // -----------------------------------------------------------------------------
 
-std::pair<std::vector<Pose>, std::vector<double>> loadPosesFromCSV(const std::string& path) {
+// -----------------------------------------------------------------------------
+// Header-driven CSV loader (P2-M3 step 0)
+// -----------------------------------------------------------------------------
+// Supports all four P2-M3 pose sources without caller-side changes:
+//
+//   poses_icp.csv            timestamp, x,  y,  z,  qw, qx, qy, qz     ← W-first
+//   poses_gps.csv            timestamp, x,  y,  z,  qw, qx, qy, qz     ← W-first (epoch ns)
+//   poses_carto.csv          timestamp, x,  y,  z,  qw, qx, qy, qz     ← W-first
+//   poses_slam_manifold.csv  frame_id,  tx, ty, tz, qx, qy, qz, qw     ← W-last
+//
+// Strategy:
+//   1. Read header line → map column-name → column-index.
+//   2. Resolve aliases:
+//        time column:   "timestamp" | "frame_id" | "t"   (exactly one required)
+//        x column:      "x" | "tx"                       (exactly one required)
+//        y column:      "y" | "ty"                       (exactly one required)
+//        z column:      "z" | "tz"                       (exactly one required)
+//        quaternion:    "qw","qx","qy","qz"              (all four required by name)
+//   3. Per-row parse indexes BY NAME — column order in the file is irrelevant.
+//   4. Always call Eigen::Quaterniond(qw, qx, qy, qz) — Eigen's constructor IS
+//      W-first. The header-column order doesn't matter because we pull by name.
+//
+// Error handling: on any header malformation, log the specific missing/
+// ambiguous column and return empty vectors. Callers MUST check for empty().
+// -----------------------------------------------------------------------------
+
+namespace {
+
+// Helper: find first matching alias in the column map; -1 if none present.
+// Returns -2 if MORE than one alias is present (ambiguous — file is malformed).
+static int findAlias(const std::unordered_map<std::string, int>& cols,
+                     std::initializer_list<const char*> aliases) {
     // YOUR CODE:
-    //   Open file, skip header, parse each line:
-    //     t, tx, ty, tz, qx, qy, qz, qw   (comma-separated)
-    //   Convert quaternion (qx,qy,qz,qw) → rotation matrix:
-    //     Eigen::Quaterniond q(qw, qx, qy, qz);  // note ordering!
-    //     Pose p;
-    //     p.R = q.toRotationMatrix();
-    //     p.t = Vector3d(tx, ty, tz);
-    //   push_back to output vector
-    // Modify loadPosesFromCSV to also return timestamps (change return type to pair<vector<Pose>, vector<double>>)
-    std::vector<Pose> poses;
+    //   int found = -1;
+    //   for (const char* name : aliases) {
+    //       auto it = cols.find(name);
+    //       if (it != cols.end()) {
+    //           if (found != -1) return -2;            // ambiguous: two aliases in same file
+    //           found = it->second;
+    //       }
+    //   }
+    //   return found;
+    int found = -1;
+    for (const char* name : aliases) {
+        auto it = cols.find(name);
+        if (it != cols.end()) {
+            if (found != -1) return -2; // ambiguous: two aliases in same file
+            found = it->second;
+        }
+    }
+    return found;
+}
+
+// Helper: tokenize a comma-separated line into a vector<string>.
+// Leading/trailing whitespace is trimmed per token (robust to "tx, ty, tz"
+// vs "tx,ty,tz" header styles). Empty trailing fields ARE preserved as "".
+static std::vector<std::string> splitCSV(const std::string& line) {
+    // YOUR CODE:
+    //   std::vector<std::string> out;
+    //   std::istringstream ss(line);
+    //   std::string tok;
+    //   while (std::getline(ss, tok, ',')) {
+    //       // Trim whitespace from both ends.
+    //       auto l = tok.find_first_not_of(" \t\r\n");
+    //       auto r = tok.find_last_not_of(" \t\r\n");
+    //       out.push_back((l == std::string::npos) ? "" : tok.substr(l, r - l + 1));
+    //   }
+    //   return out;
+    std::vector<std::string> out;
+    std::istringstream ss(line);
+    std::string tok;
+    while (std::getline(ss, tok, ',')) {
+        // Trim whitespace from both ends.
+        auto l = tok.find_first_not_of(" \t\r\n");
+        auto r = tok.find_last_not_of(" \t\r\n");
+        out.push_back((l == std::string::npos) ? "" : tok.substr(l, r - l + 1));
+    }
+    return out;
+}
+
+}  // anonymous namespace
+
+std::pair<std::vector<Pose>, std::vector<double>> loadPosesFromCSV(const std::string& path) {
+    std::vector<Pose>   poses;
+    std::vector<double> timestamps;
+
     std::ifstream file(path);
     if (!file.is_open()) {
-        std::cerr << "Failed to open file: " << path << std::endl;
-        return {poses, {}};
-    }   
-    std::vector<double> timestamps;
-    std::string line;
-    // Skip header
-    std::getline(file, line);
-    while (std::getline(file, line)) {
-        std::istringstream ss(line);
-        std::string token;
-        std::vector<std::string> tokens;
-        while (std::getline(ss, token, ',')) {
-            tokens.push_back(token);
+        std::cerr << "[loadPosesFromCSV] failed to open: " << path << std::endl;
+        return {poses, timestamps};
+    }
+
+    // -------------------------------------------------------------------------
+    // 1) Read and parse the header line → column-name → index map.
+    // -------------------------------------------------------------------------
+    std::string header_line;
+    if (!std::getline(file, header_line)) {
+        std::cerr << "[loadPosesFromCSV] empty file: " << path << std::endl;
+        return {poses, timestamps};
+    }
+
+    // YOUR CODE:
+    //   std::vector<std::string> header = splitCSV(header_line);
+    //   std::unordered_map<std::string, int> col;
+    //   for (int i = 0; i < (int)header.size(); ++i) col[header[i]] = i;
+    //
+    //   Debug check: every column name should be non-empty. If not, the header
+    //   is malformed — log and return empty.
+    std::vector<std::string> header = splitCSV(header_line);
+    std::unordered_map<std::string, int> col;
+    for (int i = 0; i < (int)header.size(); ++i) {
+        if (header[i].empty()) {
+            std::cerr << "[loadPosesFromCSV] malformed header (empty column name): " << path << "\n  header was: " << header_line << "\n";
+            return {poses, timestamps};
         }
-        if (tokens.size() != 8) {
-            std::cerr << "Invalid line format: " << line << std::endl;
+        col[header[i]] = i;
+    }
+
+    // -------------------------------------------------------------------------
+    // 2) Resolve aliases. If ANY required column is missing, bail with a clear
+    //    error message naming the missing field.
+    // -------------------------------------------------------------------------
+    // YOUR CODE:
+    //   int it_time = findAlias(col, {"timestamp", "frame_id", "t"});
+    //   int it_x    = findAlias(col, {"x", "tx"});
+    //   int it_y    = findAlias(col, {"y", "ty"});
+    //   int it_z    = findAlias(col, {"z", "tz"});
+    //   int it_qw   = findAlias(col, {"qw"});
+    //   int it_qx   = findAlias(col, {"qx"});
+    //   int it_qy   = findAlias(col, {"qy"});
+    //   int it_qz   = findAlias(col, {"qz"});
+    //
+    //   auto require = [&](int idx, const char* label) {
+    //       if (idx == -1) {
+    //           std::cerr << "[loadPosesFromCSV] missing column: " << label
+    //                     << " in " << path << "\n"
+    //                     << "  header was: " << header_line << "\n";
+    //           return false;
+    //       }
+    //       if (idx == -2) {
+    //           std::cerr << "[loadPosesFromCSV] ambiguous alias for " << label
+    //                     << " in " << path << " (more than one match)\n";
+    //           return false;
+    //       }
+    //       return true;
+    //   };
+    //   if (!require(it_time, "time") || !require(it_x, "x") || !require(it_y, "y")
+    //       || !require(it_z, "z")    || !require(it_qw, "qw") || !require(it_qx, "qx")
+    //       || !require(it_qy, "qy") || !require(it_qz, "qz")) {
+    //       return {poses, timestamps};
+    //   }
+    //
+    //   Optional: detect which quaternion convention this file uses and log it.
+    //   This is useful for the blog's "debugging story" sidebar. Pseudocode:
+    //     const bool w_first = col["qw"] < col["qx"];
+    //     std::cerr << "[loadPosesFromCSV] " << path
+    //               << " detected " << (w_first ? "W-first" : "W-last") << "\n";
+
+    int it_time = findAlias(col, {"timestamp", "frame_id", "t"});
+    int it_x    = findAlias(col, {"x", "tx"});
+    int it_y    = findAlias(col, {"y", "ty"});
+    int it_z    = findAlias(col, {"z", "tz"});
+    int it_qw   = findAlias(col, {"qw"});
+    int it_qx   = findAlias(col, {"qx"});
+    int it_qy   = findAlias(col, {"qy"});
+    int it_qz   = findAlias(col, {"qz"});   
+
+    auto require = [&](int idx, const char* label) {
+        if (idx == -1) {
+            std::cerr << "[loadPosesFromCSV] missing column: " << label
+                      << " in " << path << "\n"
+                      << "  header was: " << header_line << "\n";
+            return false;
+        }
+        if (idx == -2) {
+            std::cerr << "[loadPosesFromCSV] ambiguous alias for " << label
+                      << " in " << path << " (more than one match)\n";
+            return false;
+        }
+        return true;
+    };
+    if (!require(it_time, "time") || !require(it_x, "x") || !require(it_y, "y")
+        || !require(it_z, "z")    || !require(it_qw, "qw") || !require(it_qx, "qx")
+        || !require(it_qy, "qy") || !require(it_qz, "qz")) {
+        return {poses, timestamps};
+    }
+
+    const bool w_first = col["qw"] < col["qx"];
+    std::cerr << "[loadPosesFromCSV] " << path
+              << " detected " << (w_first ? "W-first" : "W-last") << "\n";
+
+
+
+    // -------------------------------------------------------------------------
+    // 3) Parse data rows. Index by NAME (using it_* indices), never by position.
+    // -------------------------------------------------------------------------
+    std::string line;
+    int line_no = 1;                              // header was line 1
+    while (std::getline(file, line)) {
+        ++line_no;
+        if (line.empty()) continue;
+
+        // YOUR CODE:
+        //   std::vector<std::string> toks = splitCSV(line);
+        //   if ((int)toks.size() < (int)header.size()) {
+        //       std::cerr << "[loadPosesFromCSV] short row at " << path
+        //                 << ":" << line_no << " (" << toks.size()
+        //                 << " cols, expected " << header.size() << ")\n";
+        //       continue;
+        //   }
+        //
+        //   try {
+        //       double t  = std::stod(toks[it_time]);
+        //       double tx = std::stod(toks[it_x]);
+        //       double ty = std::stod(toks[it_y]);
+        //       double tz = std::stod(toks[it_z]);
+        //       double qw = std::stod(toks[it_qw]);
+        //       double qx = std::stod(toks[it_qx]);
+        //       double qy = std::stod(toks[it_qy]);
+        //       double qz = std::stod(toks[it_qz]);
+        //
+        //       // Eigen's ctor IS (w, x, y, z). Column order in the file is
+        //       // irrelevant because we pulled by name above.
+        //       Eigen::Quaterniond q(qw, qx, qy, qz);
+        //       q.normalize();                              // guard against drift in source CSVs
+        //
+        //       Pose p;
+        //       p.R = q.toRotationMatrix();
+        //       p.t = Eigen::Vector3d(tx, ty, tz);
+        //       poses.push_back(p);
+        //       timestamps.push_back(t);
+        //   } catch (const std::exception& e) {
+        //       std::cerr << "[loadPosesFromCSV] parse error at " << path
+        //                 << ":" << line_no << " — " << e.what() << "\n";
+        //       // Continue on bad row rather than abort — RELLIS has some trailing
+        //       // whitespace rows in practice.
+        //   }
+        std::vector<std::string> toks = splitCSV(line);
+        if ((int)toks.size() < (int)header.size()) {
+            std::cerr << "[loadPosesFromCSV] short row at " << path
+                      << ":" << line_no << " (" << toks.size()
+                      << " cols, expected " << header.size() << ")\n";
             continue;
         }
-        double timestamp = std::stod(tokens[0]);
-        double tx = std::stod(tokens[1]);
-        double ty = std::stod(tokens[2]);
-        double tz = std::stod(tokens[3]);
-        double qx = std::stod(tokens[4]);
-        double qy = std::stod(tokens[5]);
-        double qz = std::stod(tokens[6]);
-        double qw = std::stod(tokens[7]);
-        Eigen::Quaterniond q(qw, qx, qy, qz);
-        Pose p;
-        p.R = q.toRotationMatrix();
-        p.t = Eigen::Vector3d(tx, ty, tz);
-        poses.push_back(p);
-        timestamps.push_back(timestamp);
+        try {
+            double t  = std::stod(toks[it_time]);
+            double tx = std::stod(toks[it_x]);
+            double ty = std::stod(toks[it_y]);
+            double tz = std::stod(toks[it_z]);
+            double qw = std::stod(toks[it_qw]);
+            double qx = std::stod(toks[it_qx]);
+            double qy = std::stod(toks[it_qy]);
+            double qz = std::stod(toks[it_qz]);
+
+            Eigen::Quaterniond q(qw, qx, qy, qz);
+            q.normalize();
+
+            Pose p;
+            p.R = q.toRotationMatrix();
+            p.t = Eigen::Vector3d(tx, ty, tz);
+            poses.push_back(p);
+            timestamps.push_back(t);
+        } catch (const std::exception& e) {
+            std::cerr << "[loadPosesFromCSV] parse error at " << path
+                      << ":" << line_no << " — " << e.what() << "\n";
+        }
     }
+
     file.close();
+
+    // Sanity: if we read the header but zero rows, the file was header-only.
+    if (poses.empty()) {
+        std::cerr << "[loadPosesFromCSV] no rows parsed from " << path
+                  << " (header-only or all rows malformed)\n";
+    }
+
     return {poses, timestamps};
 }
 
@@ -1079,6 +1311,212 @@ double PoseGraphSLAM::evaluateCost() const {
     return cost;                                                                                                                                                          
 }  
 
+
+// =============================================================================                                                                                          
+// Marginal covariance extraction (P2-M3)                 
+// =============================================================================                                                                                          
+
+std::vector<Eigen::Matrix<double, 6, 6>> computeMarginalsG2O(                                                                                                             
+    g2o::SparseOptimizer& optimizer, int num_poses) {                                                                                                                                    
+    // YOUR CODE:
+    //                                                                                                                                                                    
+    // 1) Build the vertex-pair list for the diagonal blocks of H^-1:
+    //      std::vector<std::pair<int,int>> pairs;                                                                                                                        
+    //      for (int i = 0; i < num_poses; ++i)
+    //        pairs.emplace_back(i, i);                                                                                                                                   
+    //                                                    
+    // 2) Call computeMarginals:                                                                                                                                          
+    //      g2o::SparseBlockMatrix<Eigen::MatrixXd> spinv;                                                                                                                
+    //      bool ok = optimizer.computeMarginals(spinv, pairs);                                                                                                           
+    //      if (!ok) {  /* log + return vector filled with Identity*1e9 */  }                                                                                             
+    //                                                                                                                                                                    
+    // 3) Extract each diagonal block:                    
+    //      std::vector<Eigen::Matrix<double,6,6>> out(num_poses);                                                                                                        
+    //      for (int i = 0; i < num_poses; ++i) {                                                                                                                         
+    //        auto* block = spinv.block(i, i);
+    //        if (!block || block->rows() != 6 || block->cols() != 6) {                                                                                                   
+    //          out[i] = Eigen::Matrix<double,6,6>::Identity() * 1e9;  // "no info"                                                                                       
+    //          continue;                                                                                                                                                 
+    //        }                                                                                                                                                           
+    //        out[i] = *block;   // dynamic → 6x6 copy                                                                                                                    
+    //                                                                                                                                                                    
+    //        // Gotcha: g2o SE3 may order blocks [trans | rot]. If your convention
+    //        // is [rot | trans] (Forster-style), permute here:                                                                                                          
+    //        //   Eigen::PermutationMatrix<6> P; P.setIdentity();                                                                                                        
+    //        //   // swap top 3 with bottom 3 rows/cols                                                                                                                  
+    //        //   out[i] = P * out[i] * P.transpose();                                                                                                                   
+    //      }                                                                                                                                                             
+    //      return out;                     
+    std::vector<std::pair<int,int>> pairs;
+    std::vector<int> hidx_to_pose_id(num_poses, -1); 
+    for (int i = 0; i < num_poses; ++i) {                                                                                                                                     
+        auto* v = dynamic_cast<g2o::OptimizableGraph::Vertex*>(optimizer.vertex(i));                                                                                          
+        if (!v || v->fixed()) continue;                                                                                                                                       
+        const int hidx = v->hessianIndex();                                                                                                                                 
+        if (hidx < 0) continue;   // not in the active variable set                                                                                                           
+        pairs.emplace_back(hidx, hidx);                                                                                                                                       
+        if (hidx < num_poses) hidx_to_pose_id[hidx] = i;                                                                                                                      
+    }
+    
+    g2o::SparseBlockMatrix<Eigen::MatrixXd> spinv;
+    bool ok = optimizer.computeMarginals(spinv, pairs);
+    std::vector<Eigen::Matrix<double, 6, 6>> out(num_poses, Eigen::Matrix<double, 6, 6>::Identity() * 1e9);  // default sentinel
+    if (!ok) {
+        std::cerr << "Failed to compute marginals\n";
+        return out;
+    }
+
+    // Walk the result using hessian indices; map each one back to its pose ID.                                                                                               
+    for (size_t h = 0; h < pairs.size(); ++h) {                                                                                                                             
+        const int hidx = pairs[h].first;                                                                                                                                      
+        auto* block = spinv.block(hidx, hidx);                                                                                                                                
+        if (!block || block->rows() != 6 || block->cols() != 6) continue;                                                                                                     
+                                                                                                                                                                            
+        const int pose_id = hidx_to_pose_id[hidx];                                                                                                                            
+        if (pose_id < 0 || pose_id >= num_poses) continue;                                                                                                                    
+                                                                                                                                                                            
+        out[pose_id] = *block;   // dynamic MatrixXd → fixed 6x6 (dimensions already verified)                                                                                
+                                                                                                                                                                            
+        // Permute g2o's [trans | rot] to our [rot | trans]. Verified by the                                                                                                  
+        // G2OMarginalTranslationBlockIsBottomRight test.                                                                                                                   
+        Eigen::PermutationMatrix<6> P;                                                                                                                                        
+        P.setIdentity();                                                                                                                                                      
+        P.indices() << 3, 4, 5, 0, 1, 2;                                                                                                                                      
+        out[pose_id] = P * out[pose_id] * P.transpose();                                                                                                                      
+    }                                                                                                                                                                         
+                                                                                                                                                                            
+    return out;
+}                                                                                                                                                                         
+                                                        
+std::vector<Eigen::Matrix<double, 6, 6>> computeEdgeInformationSum(                                                                                                       
+    const PoseGraphSLAM& graph, int num_poses) {                                                                                                                                        
+    // YOUR CODE:                                         
+    //
+    // std::vector<Eigen::Matrix<double,6,6>> H(num_poses, Eigen::Matrix<double,6,6>::Zero());
+    //                                                                                                                                                                    
+    // for (const auto& e : graph.icp_edges)  { H[e.i] += e.information; H[e.j] += e.information; }
+    // for (const auto& e : graph.imu_edges)  { H[e.i] += e.information; H[e.j] += e.information; }                                                                       
+    // for (const auto& e : graph.loop_edges) { H[e.i] += e.information; H[e.j] += e.information; }                                                                       
+    //                                                                                                                                                                    
+    // // GPS is unary 3x3 translation-only — embed as:                                                                                                                   
+    // //   H_6 = [ 0_3   0    ]                                                                                                                                          
+    // //         [ 0     H_3  ]                                                                                                                                          
+    // for (const auto& e : graph.gps_edges) {                                                                                                                            
+    //   Eigen::Matrix<double,6,6> H6 = Eigen::Matrix<double,6,6>::Zero();                                                                                                
+    //   H6.block<3,3>(3,3) = e.information;   // translation block                                                                                                       
+    //   H[e.i] += H6;                                                                                                                                                    
+    // }                                                                                                                                                                  
+    //                                                                                                                                                                    
+    // // Also add pose-0 anchor stiffness so H[0] is non-singular:
+    // H[0] += Eigen::Matrix<double,6,6>::Identity() * 1e12;                                                                                                              
+    //                                                                                                                                                                    
+    // // Invert to get covariance; fall back to huge-sigma on singular.                                                                                                  
+    // std::vector<Eigen::Matrix<double,6,6>> P(num_poses);                                                                                                               
+    // for (int i = 0; i < num_poses; ++i) {                                                                                                                              
+    //   Eigen::FullPivLU<Eigen::Matrix<double,6,6>> lu(H[i]);                                                                                                            
+    //   P[i] = lu.isInvertible()                                                                                                                                         
+    //          ? H[i].inverse()                          
+    //          : Eigen::Matrix<double,6,6>::Identity() * 1e9;                                                                                                            
+    // }                                                  
+    // return P;                                                                                                                                                          
+    //                                                                                                                                                                    
+    // Honest ablation footnote for the blog: this heuristic ignores off-diagonal
+    // blocks of H — it cannot see that loop closures couple distant poses.    
+
+    std::vector<Eigen::Matrix<double, 6, 6>> H(num_poses, Eigen::Matrix<double, 6, 6>::Zero());
+    for (const auto& e: graph.getICPEdges()) {
+        H[e.from] += e.information;
+        H[e.to] += e.information;
+    }
+    for (const auto& e: graph.getIMUEdges()) {
+        if(e.factor.covariance.block<3,3>(0,0).determinant() < 1e-20 ||                                                                                                          
+           e.factor.covariance.block<3,3>(6,6).determinant() < 1e-20) {                                                                                                          
+            std::cerr << "WARNING: near-zero IMU covariance at edge "
+                        << e.from << "->" << e.to << ", skipping\n";                                                                                                                
+            continue;  // skip this edge entirely  
+        }
+        Eigen::Matrix<double, 9,9> info9 = e.factor.covariance.inverse();
+        Eigen::Matrix<double, 6, 6> info6 = Eigen::Matrix<double, 6, 6>::Zero();
+        info6.block<3,3>(0,0) = info9.block<3,3>(0,0); //  rotation block
+        info6.block<3,3>(3,3) = info9.block<3,3>(6,6); //  translation block
+        info6.block<3,3>(0,3) = info9.block<3,3>(0,6); // cross terms (translation-rotation)
+        info6.block<3,3>(3,0) = info9.block<3,3>(6,0);
+        H[e.from] += info6;
+        H[e.to] += info6;
+    }
+    for (const auto& e: graph.getLoopEdges()) {
+        H[e.from] += e.information;
+        H[e.to] += e.information;
+    }
+    for (const auto& e: graph.getGPSEdges()) {
+        Eigen::Matrix<double, 6, 6> H6 = Eigen::Matrix<double, 6, 6>::Zero();
+        H6.block<3,3>(3,3) = e.information;   // translation block
+        H[e.frame_id] += H6;
+    }
+    H[0] += Eigen::Matrix<double, 6, 6>::Identity() * 1e12;
+
+    std::vector<Eigen::Matrix<double, 6, 6>> P(num_poses);
+    for (int i = 0; i < num_poses; ++i) {
+        Eigen::FullPivLU<Eigen::Matrix<double, 6, 6>> lu(H[i]);
+        if(lu.isInvertible())
+            P[i] = lu.inverse();
+        else
+            P[i] = Eigen::Matrix<double, 6, 6>::Identity() * 1e9;
+    }
+    return P;                                                                                                                                                    
+}                                                                                                                                                                         
+                                                        
+double poseSigmaFromCovariance(const Eigen::Matrix<double, 6, 6>& P) {                                                                                                    
+    // YOUR CODE:                                         
+    //   Translation block location depends on your convention:
+    //     [rot | trans] → P.block<3,3>(3,3)                                                                                                                              
+    //     [trans | rot] → P.block<3,3>(0,0)                                                                                                                              
+    //   const auto Pt = P.block<3,3>(3,3);     // pick one and stay with it                                                                                              
+    //   double s = std::sqrt(std::max(0.0, Pt.trace()));                                                                                                                 
+    //   return std::min(s, 1e3);               // clamp for downstream sanity          
+    const auto Pt = P.block<3,3>(3,3);
+    double s = std::sqrt(std::max(0.0, Pt.trace()));
+    return std::min(s, 1e3);                                                                                                                                            
+}                                                                                                                                                                         
+                                                        
+bool saveCovariancesToCSV(const std::vector<Eigen::Matrix<double, 6, 6>>& covs,                                                                                           
+                        const std::string& path) {
+    // YOUR CODE:
+    //   std::ofstream f(path); if (!f) return false;                                                                                                                     
+    //   f << "frame_id";
+    //   for (int r = 0; r < 6; ++r)                                                                                                                                      
+    //     for (int c = 0; c < 6; ++c)                    
+    //       f << ",P" << r << c;                                                                                                                                         
+    //   f << "\n";                                                                                                                                                       
+    //   for (size_t i = 0; i < covs.size(); ++i) {
+    //     f << i;                                                                                                                                                        
+    //     for (int r = 0; r < 6; ++r)                    
+    //       for (int c = 0; c < 6; ++c)                                                                                                                                  
+    //         f << "," << covs[i](r, c);                 
+    //     f << "\n";
+    //   }
+    //   return true;
+    std::ofstream f(path);
+    if (!f) {
+        return false;
+    }
+    f << "frame_id";
+    for (int r = 0; r < 6; ++r) {
+        for (int c = 0; c < 6; ++c) {
+            f << ",P" << r << c;
+        }
+    }
+    f << "\n";
+    for (size_t i = 0; i < covs.size(); ++i) {
+        f << i;
+        for (int r = 0; r < 6; ++r) {
+            for (int c = 0; c < 6; ++c) {
+                f << "," << covs[i](r, c);
+            }
+        }        f << "\n";
+    }
+    return true;
+} 
 
 
 }  // namespace pose_graph

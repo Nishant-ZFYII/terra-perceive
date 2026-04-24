@@ -17,6 +17,8 @@ find_package(Eigen3 REQUIRED)
 
 include_directories(
     include
+    third_party/stb
+    third_party/tinycolormap
     ${EIGEN3_INCLUDE_DIRS}
 )
 
@@ -66,10 +68,26 @@ add_library(scan_context src/scan_context.cpp)
 target_link_libraries(scan_context Eigen3::Eigen)
 
 add_library(pose_graph_slam src/pose_graph_slam.cpp)
-target_link_libraries(pose_graph_slam so3 imu_preintegration Eigen3::Eigen)
+# g2o_core provides SparseOptimizer::computeMarginals used by computeMarginalsG2O (P2-M3).
+# The include path is also needed since g2o headers live under /usr/local/include.
+target_link_libraries(pose_graph_slam so3 imu_preintegration Eigen3::Eigen
+    g2o_core g2o_types_slam3d g2o_solver_eigen g2o_stuff)
+target_include_directories(pose_graph_slam PUBLIC /usr/local/include)
+
+# --- Phase 2-M3: WorldGrid (accumulated BEV world map) ---
+add_library(world_grid src/world_grid.cpp)
+target_link_libraries(world_grid traversability pose_graph_slam Eigen3::Eigen)
+# stb_image_write + tinycolormap are header-only; include paths already set globally.
 
 add_executable(slam_runner src/slam_runner.cpp)
 target_link_libraries(slam_runner pose_graph_slam scan_context imu_preintegration so3 point_cloud_loader g2o_wrapper Eigen3::Eigen)
+
+# --- P2-M3 accumulator runner ---
+add_executable(accumulator_runner src/accumulator_runner.cpp)
+target_link_libraries(accumulator_runner
+    world_grid traversability pose_graph_slam
+    point_cloud_loader ransac_ground_seg
+    so3 imu_preintegration Eigen3::Eigen)
 
 add_library(g2o_wrapper src/g2o_wrapper.cpp)
 target_link_libraries(g2o_wrapper pose_graph_slam Eigen3::Eigen
@@ -144,6 +162,20 @@ if(BUILD_TESTING)
 
     ament_add_gtest(test_pose_graph_slam tests/cpp/test_pose_graph_slam.cpp)
     target_link_libraries(test_pose_graph_slam pose_graph_slam so3 imu_preintegration)
+
+    # --- Phase 2-M3 tests ---
+    ament_add_gtest(test_world_grid tests/cpp/test_world_grid.cpp)
+    target_link_libraries(test_world_grid world_grid traversability pose_graph_slam so3 imu_preintegration)
+
+    # Runs with cwd = repo root so the test can find tests/data/*.csv by relative path.
+    ament_add_gtest(test_load_poses tests/cpp/test_load_poses.cpp
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    target_link_libraries(test_load_poses pose_graph_slam so3 imu_preintegration)
+
+    # Pose covariance extraction — requires g2o linkage for computeMarginalsG2O.
+    ament_add_gtest(test_pose_covariance tests/cpp/test_pose_covariance.cpp)
+    target_link_libraries(test_pose_covariance pose_graph_slam g2o_wrapper so3 imu_preintegration
+        g2o_core g2o_types_slam3d g2o_solver_eigen g2o_stuff)
 endif()
 
 if(BUILD_ROS2_NODES)

@@ -22,6 +22,10 @@ message BEVGrid {
     float origin_x = 5;
     float origin_y = 6;
     repeated float scores = 7;  // traversability [0, 1] per cell
+    repeated float confidence = 8; // per-cell [0, 1] trust
+    repeated uint32 observation_count = 9;
+    bytes coverage_mask = 10;   // packed bits for observed cells
+    float pose_sigma_at_snapshot = 11; // header-level global trust from SLAM
 }
 
 message Detection2D {
@@ -53,4 +57,15 @@ message TrackedObject {
 message TrackList {
     Header header = 1;
     repeated TrackedObject tracks = 2;
+}
+
+// Raw RGB sensor image. Subject convention: sensor.camera.rgb
+// `data` is the encoded payload; we ship JPEG (~150 KB / 1920x1200) rather
+// than raw bytes (~7 MB) to keep messages well under the broker's max_payload.
+message CameraFrame {
+    Header header = 1;
+    uint32 width = 2;
+    uint32 height = 3;
+    string encoding = 4;   // "jpeg" | "png" | "bgr8" | "rgb8"
+    bytes data = 5;
 }

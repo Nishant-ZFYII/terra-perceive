@@ -58,7 +58,10 @@ int main(int argc, char** argv) {
     std::string gps_path   = getArg(argc, argv, "--gps", "data/poses_gps.csv");
     std::string lidar_dir  = getArg(argc, argv, "--lidar", "data/RELLIS-3D/Rellis_3D_os1_cloud_node_kitti_bin/Rellis-3D/00000/os1_cloud_node_kitti_bin/");                
     std::string out_path   = getArg(argc, argv, "--out", "data/poses_slam.csv");
-    std::string opt_type   = getArg(argc, argv, "--optimizer", "manifold");                                                                                               
+    std::string opt_type   = getArg(argc, argv, "--optimizer", "manifold"); 
+    std::string cov_out_base = getArg(argc, argv, "--cov-out-base", "");                                                                                                      
+    std::string cov_method   = getArg(argc, argv, "--cov-method",   "none");                                                                                                  
+    // valid: "none", "heuristic", "g2o", "both"                                                                                              
                                                         
     pose_graph::PoseGraphConfig config;                                                                                                                                   
     config.use_icp_edges  = hasFlag(argc, argv, "--use-icp");
@@ -212,12 +215,15 @@ int main(int argc, char** argv) {
         }                                            
     }                                                                                                                                                                
     std::cout << "Added loop closure edges\n";       
-    auto result_g2o = g2o_wrapper::optimizeWithG2O(
-        poses, graph.getICPEdges(), graph.getIMUEdges(),
-        graph.getGPSEdges(), graph.getLoopEdges(),
-        0, 100, config.verbose);
-    pose_graph::savePosesToCSV(result_g2o, "data/poses_slam_g2o.csv");
-    std::cout << "Saved g2o result to data/poses_slam_g2o.csv\n";                                                                                                                                                              
+    std::vector<pose_graph::Pose> result_g2o;                                                                                                                                 
+    if (cov_method != "g2o" && cov_method != "both") {
+        result_g2o = g2o_wrapper::optimizeWithG2O(                                                                                                                            
+            poses, graph.getICPEdges(), graph.getIMUEdges(),                                                                                                                  
+            graph.getGPSEdges(), graph.getLoopEdges(),                                                                                                                        
+            0, 100, config.verbose);                                                                                                                                          
+        pose_graph::savePosesToCSV(result_g2o, "data/poses_slam_g2o.csv");                                                                                                    
+        std::cout << "Saved g2o result to data/poses_slam_g2o.csv\n";
+    }                                                                                                                                                                
     // -------------------------------------------------------------------------
     // 4. Optimize                                                                                                                                                        
     // -------------------------------------------------------------------------
@@ -228,7 +234,65 @@ int main(int argc, char** argv) {
                                             
     // -------------------------------------------------------------------------                                                                                          
     // 5. Save result                                                                                                                                                     
-    // -------------------------------------------------------------------------                                                                                          
+    // -------------------------------------------------------------------------  
+    
+ // -------------------------------------------------------------------------                                                                                              
+  // 5a. P2-M3 Ablation E — compute per-pose covariances for confidence scaling
+  // -------------------------------------------------------------------------  
+    if (cov_method != "none" && cov_out_base.empty()) {
+    std::cerr << "WARNING: --cov-method " << cov_method                                                                                                                   
+            << " requires --cov-out-base; skipping covariance save.\n";                                                                                                 
+    }                                                                                            
+    if (cov_method != "none" && !cov_out_base.empty()) {                                                                                                                      
+        const int N = static_cast<int>(result.size());                                                                                                                        
+                                                                                                                                                                                
+        // --- Heuristic path (cheap — only needs the graph) --------------------                                                                                             
+        if (cov_method == "heuristic" || cov_method == "both") {                                                                                                              
+            auto covs_h = pose_graph::computeEdgeInformationSum(graph, N);                                                                                                    
+            bool ok = pose_graph::saveCovariancesToCSV(                                                                                                                     
+                covs_h, cov_out_base + "_cov_heuristic.csv");                                                                                                                 
+            if (!ok) {                                                                                                                                                        
+                std::cerr << "ERROR: saveCovariancesToCSV failed for heuristic at "                                                                                           
+                            << cov_out_base << "_cov_heuristic.csv\n";                                                                                                          
+                return 1;                                                                                                                                                   
+            }                                                                                                                                                                 
+            std::cout << "Saved heuristic covariances (" << covs_h.size()                                                                                                   
+                        << ") to " << cov_out_base << "_cov_heuristic.csv\n";                                                                                                   
+            if (!covs_h.empty()) {                                                                                                                                            
+                std::cout << "  heuristic pose_sigma[0]="                                                                                                                     
+                            << pose_graph::poseSigmaFromCovariance(covs_h.front())                                                                                              
+                            << "  pose_sigma[N-1]="                                                                                                                             
+                            << pose_graph::poseSigmaFromCovariance(covs_h.back())
+                            << "\n";                                                                                                                                            
+            }                                                                                                                                                               
+        }                                                                                                                                                                     
+                                                                                                                                                                            
+        // --- True-marginal path (needs a live g2o::SparseOptimizer) ----------                                                                                              
+        if (cov_method == "g2o" || cov_method == "both") {
+            auto [poses_g2o, covs_g] = g2o_wrapper::optimizeWithG2OAndMarginals(                                                                                              
+                poses, graph.getICPEdges(), graph.getIMUEdges(),                                                                                                              
+                graph.getGPSEdges(), graph.getLoopEdges(),                                                                                                                    
+                0, 100, config.verbose);                                                                                                                                      
+            bool ok = pose_graph::saveCovariancesToCSV(                                                                                                                       
+                covs_g, cov_out_base + "_cov_g2o.csv");                                                                                                                       
+            if (!ok) {                                                                                                                                                        
+                std::cerr << "ERROR: saveCovariancesToCSV failed for g2o at "                                                                                               
+                            << cov_out_base << "_cov_g2o.csv\n";                                                                                                                
+                return 1;                                                                                                                                                     
+            }
+            std::cout << "Saved g2o marginals (" << covs_g.size()                                                                                                             
+                        << ") to " << cov_out_base << "_cov_g2o.csv\n";                                                                                                       
+            if (!covs_g.empty()) {                                                                                                                                            
+                std::cout << "  g2o pose_sigma[0]="
+                            << pose_graph::poseSigmaFromCovariance(covs_g.front())                                                                                              
+                            << "  pose_sigma[N-1]="                                                                                                                             
+                            << pose_graph::poseSigmaFromCovariance(covs_g.back())
+                            << "\n";                                                                                                                                            
+            }    
+            pose_graph::savePosesToCSV(poses_g2o, "data/poses_slam_g2o.csv");       
+            std::cout << "Saved g2o poses to data/poses_slam_g2o.csv\n";                                                                                                                                       
+        }
+    }
     pose_graph::savePosesToCSV(result, out_path);                                                                                                                    
     std::cout << "Saved " << result.size() << " optimized poses to " << out_path << "\n";
                                             

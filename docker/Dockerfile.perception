@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     ros-humble-tf2-ros \
     python3-pip \
     python3-dev \
+    protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Python deps (CPU-only torch to keep image size reasonable) ---
@@ -21,6 +22,8 @@ RUN pip3 install --no-cache-dir \
     pyyaml \
     imageio \
     transformers \
+    nats-py \
+    protobuf \
     && pip3 install --no-cache-dir \
     torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
@@ -34,11 +37,15 @@ print('SegFormer weights cached.')"
 # --- Copy source ---
 WORKDIR /ws/src/construction_perception
 COPY CMakeLists.txt package.xml ./
+COPY transport/ transport/
 COPY include/ include/
 COPY src/ src/
 COPY config/ config/
 COPY launch/ launch/
 COPY tests/ tests/
+
+# --- Compile Protos for Python ---
+RUN protoc -I=transport/proto --python_out=transport/proto transport/proto/perception.proto
 
 # --- Build C++ (no ROS2 nodes needed for Phase 1) ---
 WORKDIR /ws

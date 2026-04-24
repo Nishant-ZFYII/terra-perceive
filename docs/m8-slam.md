@@ -165,9 +165,7 @@ If the vehicle revisits a location facing 90° to the right, every point's atan2
 
 $$d(A, B, s) = \frac{1}{N_{\text{valid}}} \sum_{c} \left(1 - \frac{A_c \cdot B_{(c+s) \bmod 60}}{\|A_c\| \cdot \|B_{(c+s) \bmod 60}\|}\right)$$
 
-### Distance range
-
-Cosine distance is bounded by $$[0, 2]$$ in general. Since heights are non-negative, the effective range is $$[0, 1]$$ for our data — Kim and Kim [3] use a threshold of 0.1–0.3 for loop detection.
+Cosine distance is bounded by $$[0, 2]$$ in general; since heights are non-negative, the effective range is $$[0, 1]$$ for our data. Kim and Kim [3] use a threshold of 0.1–0.3 for loop detection.
 
 ![Scan Context Matching](assets/scan_context_matching.png)
 *Column-shift alignment for rotation-invariant matching. The query descriptor (top) is shifted against each candidate. The shift yielding minimum cosine distance recovers the yaw offset between revisits. Figure from Kim and Kim [3].*
