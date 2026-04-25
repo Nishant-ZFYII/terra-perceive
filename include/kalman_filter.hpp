@@ -15,7 +15,7 @@
 
 #pragma once
 #include <Eigen/Dense>
-
+namespace tracker {
 class KalmanFilter2D {
    public:
     KalmanFilter2D(float dt, float process_noise, float meas_noise);
@@ -25,6 +25,7 @@ class KalmanFilter2D {
     Eigen::Vector4f state() const;
     Eigen::Vector2f position() const;
     Eigen::Vector2f velocity() const;
+    float covariance_trace() const;
 
    private:
     Eigen::Vector4f x_;
@@ -34,3 +35,4 @@ class KalmanFilter2D {
     Eigen::Matrix<float, 2, 4> H_;
     Eigen::Matrix2f R_;
 };
+}

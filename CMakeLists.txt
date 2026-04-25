@@ -147,6 +147,9 @@ if(BUILD_TESTING)
     ament_add_gtest(test_hungarian tests/cpp/test_hungarian.cpp)
     target_link_libraries(test_hungarian hungarian)
 
+    ament_add_gtest(test_sort_tracker tests/cpp/test_sort_tracker.cpp)
+    target_link_libraries(test_sort_tracker sort_tracker)
+
     ament_add_gtest(test_loader tests/cpp/test_loader.cpp WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     target_link_libraries(test_loader point_cloud_loader)
 
