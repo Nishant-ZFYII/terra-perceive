@@ -15,17 +15,50 @@
 
 #pragma once
 #include <Eigen/Dense>
+
+#include "i_filter.hpp"
+
 namespace tracker {
-class KalmanFilter2D {
+
+// Phase-3 note: now derives IFilter so SORTTracker's Track can hold a
+// std::unique_ptr<IFilter> and swap between CV and IMM at runtime. Existing
+// callers that hold a concrete KalmanFilter2D continue to compile unchanged.
+class KalmanFilter2D : public IFilter {
    public:
     KalmanFilter2D(float dt, float process_noise, float meas_noise);
-    void init(float x, float y);
-    void predict();
-    void update(float z_x, float z_y);
-    Eigen::Vector4f state() const;
-    Eigen::Vector2f position() const;
-    Eigen::Vector2f velocity() const;
-    float covariance_trace() const;
+
+    // Second constructor: lets IMM's internal sub-filters override the
+    // transition matrix (e.g. CV for one mode, constant-position for the other)
+    // without polluting the public API. Q, R, H stay as constructed.
+    KalmanFilter2D(float dt,
+                   float process_noise,
+                   float meas_noise,
+                   const Eigen::Matrix4f& F_override);
+
+    void init(float x, float y) override;
+    void predict() override;
+    void update(float z_x, float z_y) override;
+
+    Eigen::Vector4f state() const override;
+    Eigen::Vector2f position() const override;
+    Eigen::Vector2f velocity() const override;
+    Eigen::Matrix4f covariance() const override;
+    float covariance_trace() const override;
+
+    std::unique_ptr<IFilter> clone() const override {
+        return std::make_unique<KalmanFilter2D>(*this);
+    }
+
+    // IMM mixing needs to overwrite (x_, P_) with a mixed initial condition
+    // before delegating predict()/update() to this sub-filter. Public so
+    // IMMFilter can drive it; not intended for general callers.
+    void set_state(const Eigen::Vector4f& x, const Eigen::Matrix4f& P);
+
+    // Innovation + innovation covariance from the most recent update(). IMM
+    // needs both for its mode-likelihood computation. Valid only after at
+    // least one update() since construction; undefined before that.
+    Eigen::Vector2f last_innovation() const { return last_y_; }
+    Eigen::Matrix2f last_innovation_cov() const { return last_S_; }
 
    private:
     Eigen::Vector4f x_;
@@ -34,5 +67,12 @@ class KalmanFilter2D {
     Eigen::Matrix4f Q_;
     Eigen::Matrix<float, 2, 4> H_;
     Eigen::Matrix2f R_;
+
+    // Cached from update() for IMM likelihood. Zero-initialized; meaningful
+    // only after first update().
+    Eigen::Vector2f last_y_ = Eigen::Vector2f::Zero();
+    Eigen::Matrix2f last_S_ = Eigen::Matrix2f::Identity();
 };
-}
+
+}  // namespace tracker
+

@@ -35,24 +35,69 @@
 
 #pragma once
 #include <Eigen/Dense>
+#include <memory>
 #include <vector>
 
 #include "hungarian.hpp"   // for tracker::Solver
+#include "i_filter.hpp"
 #include "kalman_filter.hpp"
 
 namespace tracker {
+enum class Order { PredictThenUpdate, UpdateThenPredict };
+
+// Which concrete filter to instantiate for new tracks. P3-M12 added IMM as
+// an alternative to the M4 baseline CV Kalman filter. Switchable at runtime
+// via SORTTracker's constructor (and tracker_runner's --filter flag).
+enum class FilterKind { CV, IMM };
 
 // A single live track. id is unique per SORTTracker instance; persists across
 // frames as long as the track is alive. class_id and z_3d are passthroughs
 // that the tracker preserves but does not interpret (M5 will use them when
 // fusing YOLO class labels and 3D-lifted bbox depths).
+//
+// Track holds its filter via unique_ptr<IFilter> so SORTTracker can swap in
+// a CV KF or an IMM at runtime without templating. Track is copyable: the
+// copy ctor/assignment use IFilter::clone() to deep-copy the polymorphic
+// filter. This preserves the M4 API where update() returns std::vector<Track>
+// by value.
 struct Track {
     int id;
-    KalmanFilter2D kf;
+    std::unique_ptr<IFilter> filter;
     int hits;       // consecutive successful matches since creation
     int misses;     // consecutive frames with no matching detection
     int class_id;
     float z_3d;
+
+    Track() = default;
+    Track(Track&&) noexcept = default;
+    Track& operator=(Track&&) noexcept = default;
+
+    Track(const Track& o)
+        : id(o.id),
+          filter(o.filter ? o.filter->clone() : nullptr),
+          hits(o.hits),
+          misses(o.misses),
+          class_id(o.class_id),
+          z_3d(o.z_3d) {}
+
+    Track& operator=(const Track& o) {
+        if (this != &o) {
+            id = o.id;
+            filter = o.filter ? o.filter->clone() : nullptr;
+            hits = o.hits;
+            misses = o.misses;
+            class_id = o.class_id;
+            z_3d = o.z_3d;
+        }
+        return *this;
+    }
+
+    // Convenience accessors — delegate to the filter so call sites in
+    // tracker_runner don't have to dereference filter and don't need to
+    // know the concrete filter type.
+    Eigen::Vector2f position() const { return filter->position(); }
+    Eigen::Vector2f velocity() const { return filter->velocity(); }
+    float covariance_trace() const { return filter->covariance_trace(); }
 };
 
 class SORTTracker {
@@ -61,9 +106,11 @@ class SORTTracker {
                 int max_misses,
                 int min_hits,
                 Solver solver = Solver::Greedy,
+                Order order = Order::PredictThenUpdate,
                 float dt = 0.1f,
                 float process_noise = 0.01f,
-                float meas_noise = 0.1f);
+                float meas_noise = 0.1f,
+                FilterKind filter_kind = FilterKind::CV);
 
     // Run one frame. detections[i] is the (x, y) of the i-th detection in
     // measurement frame; class_ids[i] is its class label (passthrough).
@@ -89,6 +136,8 @@ class SORTTracker {
     float dt_;
     float process_noise_;
     float meas_noise_;
+    Order order_;
+    FilterKind filter_kind_;
 
     // Build cost matrix (rows = current tracks, cols = detections) and run
     // hungarian_solve. Returns (track_index, det_index) pairs.

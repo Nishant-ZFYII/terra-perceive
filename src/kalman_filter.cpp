@@ -62,6 +62,17 @@ KalmanFilter2D::KalmanFilter2D(float dt, float process_noise, float meas_noise) 
     R_ = meas_noise * Eigen::Matrix2f::Identity();
 
 }
+
+// Phase-3 IMM constructor: same as above but lets the caller override F.
+// Used by IMMFilter to spawn a constant-position sub-filter (F = I_4) while
+// keeping H, Q, R in lockstep with the CV sub-filter.
+KalmanFilter2D::KalmanFilter2D(float dt,
+                               float process_noise,
+                               float meas_noise,
+                               const Eigen::Matrix4f& F_override)
+    : KalmanFilter2D(dt, process_noise, meas_noise) {
+    F_ = F_override;
+}
 // -----------------------------------------------------------------------------
 // init — seed the filter with an initial position. Zero velocity prior, large
 // initial covariance so the first few updates dominate.
@@ -116,6 +127,11 @@ void KalmanFilter2D::update(float z_x, float z_y) {
     // YOUR CODE: compute S = H_ * P_ * H_.transpose() + R_.
     Eigen::Matrix2f S = H_ * P_ * H_.transpose() + R_;
 
+    // Cache (y, S) for IMM mode-likelihood computation. Cheap and only matters
+    // when this KF is being driven as a sub-filter inside IMMFilter.
+    last_y_ = y;
+    last_S_ = S;
+
     // YOUR CODE: compute K via Cholesky solve, NOT S.inverse().
     // The cleanest form is:
     //   Eigen::Matrix<float, 4, 2> K = S.llt().solve((H_ * P_).eval()).transpose();
@@ -146,5 +162,12 @@ void KalmanFilter2D::update(float z_x, float z_y) {
 Eigen::Vector4f KalmanFilter2D::state() const { return x_; }
 Eigen::Vector2f KalmanFilter2D::position() const { return x_.head<2>(); }
 Eigen::Vector2f KalmanFilter2D::velocity() const { return x_.tail<2>(); }
-float KalmanFilter2D::covariance_trace() const { return P_.trace(); } 
+Eigen::Matrix4f KalmanFilter2D::covariance() const { return P_; }
+float KalmanFilter2D::covariance_trace() const { return P_.trace(); }
+
+void KalmanFilter2D::set_state(const Eigen::Vector4f& x, const Eigen::Matrix4f& P) {
+    x_ = x;
+    P_ = P;
 }
+
+}  // namespace tracker
