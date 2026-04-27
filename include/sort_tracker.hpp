@@ -288,11 +288,28 @@ class SORTTracker {
         const std::vector<Embedding>& det_embeddings,
         bool use_lost_pos);
 
-    // Position-gate scale factor for Lost-stage matching. Lost tracks have
-    // frozen positions that are stale by `lost_age` frames; scaling the
-    // gate up by this factor lets re-detections within ~5×max_dist still
-    // match if appearance agrees. Conservative — appearance does the real
-    // work.
+    // Position-gate HARD CAP for Lost-stage matching. After Mahalanobis
+    // gating (see match_subset), this acts as a physical sanity ceiling
+    // on world-frame drift — Mahalanobis can match a high-uncertainty
+    // track to anything within its covariance ellipsoid, but no track
+    // should ever match a detection more than `kLostPosGateScale ×
+    // max_dist` away in world frame regardless of how uncertain it is.
+    // Set to 5.0 (= 25 m at max_dist=5), the same value Fix B shipped
+    // with — Mahalanobis does the per-track-confidence cutting; this is
+    // just the floor against pathological cov_trace blowup.
+    //
+    // Fix C history (kept for narrative). Fix C tried tightening this
+    // constant 5.0 → 2.0 (= 10 m hard gate). On RELLIS that produced
+    // 299 distinct / 158-frame mean lifetime — worse than M13 with
+    // cascade entirely disabled. Diagnosis: DBSCAN's cluster-centroid
+    // jitter on stationary trees regularly drifts 5–15 m between
+    // sightings (partial-tree returns vs whole-tree returns), and a
+    // fixed 10 m gate rejects most of those legitimate re-acquisitions
+    // while keeping the actually-false ones at 12–18 m drift. Conclusion:
+    // a fixed-distance gate cannot distinguish "noisy stationary tree"
+    // from "different physical object." Track covariance carries that
+    // information; Mahalanobis uses it. See docs/m10-debug-log.md
+    // "Fix C postmortem" + "Mahalanobis gate" entries.
     static constexpr float kLostPosGateScale = 5.0f;
 };
 

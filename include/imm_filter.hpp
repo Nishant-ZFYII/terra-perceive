@@ -63,6 +63,26 @@ class IMMFilter : public IFilter {
     Eigen::Matrix4f covariance() const override { return P_combined_; }
     float covariance_trace() const override { return P_combined_.trace(); }
 
+    // For Mahalanobis cascade gating, return the MORE CONFIDENT sub-model's
+    // 2×2 position covariance — not the combined P. The combined P includes
+    // the inter-mode spread term `(x_j - x_combined)(x_j - x_combined)^T`
+    // which inflates dramatically during pre-Lost misses when CV and CP
+    // disagree on position (CV predicts forward at velocity, CP stays put);
+    // a track with v ≈ 5 m/s after 10 misses has σ_pos ≈ 5–7 m in the
+    // combined cov, large enough to admit a 22 m world-drift revival as
+    // Mahalanobis-acceptable. That's the right answer for estimation
+    // (marginal posterior under model uncertainty) but the wrong answer
+    // for gating ("is this physically the same object?"). Picking the
+    // more confident sub-model gives the gate a tighter, principled shape.
+    //
+    // "More confident" = lower trace of the 2×2 position block. Ties
+    // break to CV (mode 0) — irrelevant in practice.
+    Eigen::Matrix2f gating_position_covariance_2x2() const override {
+        const auto P_cv = filters_[0].covariance().topLeftCorner<2, 2>();
+        const auto P_cp = filters_[1].covariance().topLeftCorner<2, 2>();
+        return (P_cp.trace() < P_cv.trace()) ? P_cp : P_cv;
+    }
+
     std::unique_ptr<IFilter> clone() const override {
         return std::make_unique<IMMFilter>(*this);
     }

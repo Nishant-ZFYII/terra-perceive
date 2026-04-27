@@ -1,9 +1,9 @@
 {
   "frames": 2848,
   "total_track_rows": 47375,
-  "distinct_track_ids": 242,
+  "distinct_track_ids": 384,
   "id_switches": 0,
-  "runtime_ms": 2958.7,
+  "runtime_ms": 3368.94,
   "solver": "munkres",
   "max_dist": 5,
   "max_misses": 10,

@@ -145,9 +145,81 @@ std::vector<std::pair<int, int>> SORTTracker::match_subset(
         }
     }
 
-    // Position gate. Lost stage relaxes by kLostPosGateScale because the
-    // frozen position has aged by lost_age frames; appearance does the
-    // real disambiguation in this stage.
+    // Mahalanobis gate (cascade / Lost stage only).
+    //
+    // After Fix C demonstrated that a fixed-distance gate cannot
+    // disambiguate "DBSCAN-noisy stationary tree" from "different physical
+    // object" — both produce identical world-frame drifts of 5–15 m on
+    // RELLIS — we gate Lost-stage matches by the Mahalanobis distance
+    // through each track's position covariance:
+    //
+    //   d_mahal² = Δᵀ · (P_pos)⁻¹ · Δ < χ²(0.95, dof=2) ≈ 5.99
+    //
+    // P_pos is the 2×2 top-left block of the filter's full covariance
+    // (covariance of (x, y); velocity rows/cols dropped — the gate only
+    // cares about position uncertainty). For IMM, this is the mode-mixed
+    // P_combined the filter already computes.
+    //
+    // Confident track + small drift  → small d_mahal²  → accept
+    // Confident track + 12 m drift   → huge d_mahal²   → reject
+    // Long-Lost (P inflated) + 12 m  → moderate d_mahal² → accept
+    //
+    // The fixed-distance `pos_gate` below is retained as a HARD physical
+    // ceiling above Mahalanobis — even if cov_trace blows up, no Lost
+    // track ever revives more than `kLostPosGateScale × max_dist` away in
+    // world frame. This guards against numerical pathology, not normal
+    // operation.
+    //
+    // Live stage keeps the simple Euclidean gate — match_subset for Live
+    // tracks runs every frame on small drift, the Mahalanobis machinery
+    // is overkill there and would change M4/M12 baseline behavior.
+    // χ² threshold for the Mahalanobis cascade gate (dof = 2).
+    //
+    // Sweep history (RELLIS, max_age=300, ego-poses on, IMM filter):
+    //   χ²=5.99 + combined cov (Mahal v1) → 207/229, 16 @ >20m drift
+    //   χ²=5.99 + per-mode cov (Mahal v2) → 242/196, 11 @ >20m drift  ← shipped
+    //   χ²=2.28 + per-mode cov (Mahal v3) → 384/123,  4 @ >20m drift
+    //
+    // Mahal-v3 (tighter χ²) drove false-merges down further but distinct
+    // IDs ballooned to 384 and lifetime collapsed — the gate was rejecting
+    // legitimate DBSCAN-noisy revivals (centroid jitter of 5–15 m on
+    // stationary trees as LiDAR scans different sides of the trunk).
+    // Mahal-v2 sits at the trade-off knee; further tightening hits the
+    // structural ceiling set by DBSCAN noise, not the tracker. The right
+    // next move is upstream — multi-frame point cloud accumulation or
+    // tighter DBSCAN eps — not gate-tuning. Phase-4 follow-up.
+    //
+    // χ²(0.95, 2) ≈ 5.99 — the standard "95% confidence ellipse" gate.
+    constexpr float kChiSq2DoF95 = 5.99f;
+    Eigen::MatrixXf d_mahal_sq;
+    if (use_lost_pos) {
+        d_mahal_sq.resize(N, M);
+        for (int i = 0; i < N; ++i) {
+            const Track& t = tracks_[track_indices[i]];
+            // Use the gating-specific 2x2 position cov, not the combined
+            // covariance(). For IMMFilter this returns the more confident
+            // sub-model — see IFilter::gating_position_covariance_2x2() docs.
+            const Eigen::Matrix2f P_pos = t.filter->gating_position_covariance_2x2();
+            // Regularize: floor diagonal at (0.1 m)² so a freshly-init'd
+            // filter with near-zero P doesn't yield infinite Mahalanobis
+            // for any non-zero drift. 0.01 m² ≈ DBSCAN centroid noise on
+            // a confident cluster.
+            Eigen::Matrix2f P_reg = P_pos;
+            P_reg(0, 0) = std::max(P_reg(0, 0), 0.01f);
+            P_reg(1, 1) = std::max(P_reg(1, 1), 0.01f);
+            const Eigen::Matrix2f P_inv = P_reg.inverse();
+            const Eigen::Vector2f p =
+                Eigen::Vector2f(T_ego_world * t.lost_pos_world);
+            for (int j = 0; j < M; ++j) {
+                const Eigen::Vector2f delta = p - dets[det_indices[j]].position;
+                d_mahal_sq(i, j) = delta.transpose() * P_inv * delta;
+            }
+        }
+    }
+
+    // Position gate. Lost stage uses kLostPosGateScale × max_dist as the
+    // HARD physical ceiling above Mahalanobis (see comment block above);
+    // Live stage uses the standard max_dist.
     const float pos_gate = use_lost_pos
                                ? max_dist_ * kLostPosGateScale
                                : max_dist_;
@@ -176,17 +248,28 @@ std::vector<std::pair<int, int>> SORTTracker::match_subset(
 
     auto raw_pairs = hungarian_solve(cost, solver_, solver_gate);
 
-    // Two-step gate: cost-matrix gate (already enforced by solver) AND
-    // physical-distance gate (in meters). The physical gate stops a Lost
-    // track + new detection that happen to have similar appearance from
-    // matching across the entire scene — appearance is a tiebreaker, not
-    // a teleporter.
+    // Three-step gate (Lost stage adds the Mahalanobis test):
+    //   1. cost-matrix gate (already enforced by solver)
+    //   2. Mahalanobis: d_mahal² ≤ χ²(0.95, dof=2) ≈ 5.99 — only when
+    //      use_lost_pos. This is the primary admission gate for cascade
+    //      revivals; it's the answer Fix C couldn't give with a fixed
+    //      distance because it can't distinguish DBSCAN noise from
+    //      different physical objects without using track confidence.
+    //   3. physical-distance HARD CEILING: d_pos ≤ kLostPosGateScale ×
+    //      max_dist. Guards against numerical pathology where cov_trace
+    //      blows up to absurd values and Mahalanobis would let a track
+    //      teleport across the scene.
+    //
+    // Live stage skips step 2 — it runs every frame, drift is small,
+    // appearance does the disambiguation, and the M4/M12 unit tests
+    // depend on the simple Euclidean cost matrix being unchanged.
     std::vector<std::pair<int, int>> gated;
     gated.reserve(raw_pairs.size());
     for (auto [li, lj] : raw_pairs) {
-        if (cost(li, lj) <= solver_gate && d_pos_phys(li, lj) <= pos_gate) {
-            gated.emplace_back(track_indices[li], det_indices[lj]);
-        }
+        if (cost(li, lj) > solver_gate) continue;
+        if (d_pos_phys(li, lj) > pos_gate) continue;
+        if (use_lost_pos && d_mahal_sq(li, lj) > kChiSq2DoF95) continue;
+        gated.emplace_back(track_indices[li], det_indices[lj]);
     }
     return gated;
 }

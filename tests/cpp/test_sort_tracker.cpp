@@ -438,14 +438,22 @@ TEST(SORTTrackerCascade, CascadeRespectsMaxAgeBudget) {
 // physical cluster the track was previously associated with.
 // -----------------------------------------------------------------------------
 TEST(SORTTrackerCascade, CascadeRevivalSurvivesEgoMotion) {
-    SORTTracker tr(/*max_dist=*/3.0f,
+    // Note: process_noise=2.0 and meas_noise=0.3 match RELLIS production
+    // (run_tracker_on_rellis.sh). The Mahalanobis gate added in the
+    // post-Fix-C correction grades a revival's plausibility against the
+    // filter's covariance, so the test must use realistic filter dynamics
+    // — at process_noise=0.01 (synthetic-tight default), P stays so small
+    // that even a 4 m drift yields d_mahal² ≫ χ² and Mahalanobis correctly
+    // rejects it. Same numbers as the real config = same gate behavior
+    // we ship with.
+    SORTTracker tr(/*max_dist=*/5.0f,
                    /*max_misses=*/3,
                    /*min_hits=*/1,
                    Solver::Munkres,
                    tracker::Order::PredictThenUpdate,
                    /*dt=*/0.1f,
-                   /*process_noise=*/0.01f,
-                   /*meas_noise=*/0.1f,
+                   /*process_noise=*/2.0f,
+                   /*meas_noise=*/0.3f,
                    tracker::FilterKind::CV,
                    /*use_appearance=*/false,
                    /*appearance_weight=*/0.0f,
@@ -505,13 +513,74 @@ TEST(SORTTrackerCascade, CascadeRevivalSurvivesEgoMotion) {
     EXPECT_NEAR(revived->position().y(), 0.0f, 1.0f);
 }
 
-// Pair to the test above: with T_world_ego left at Identity (the legacy
-// path / synthetic-data callers / pre-Fix-B behavior), the same scenario
-// silently revives onto the decoy cluster. This documents the bug Fix B
-// solves and guards against accidentally regressing the world-frame
-// projection back to ego-frame.
-TEST(SORTTrackerCascade, CascadeRevivalWithoutEgoMotionAnchorsToDecoy) {
-    SORTTracker tr(/*max_dist=*/3.0f,
+// -----------------------------------------------------------------------------
+// Mahalanobis gate regression — directly mirrors the post-Fix-B audit
+// finding (tid=28 in the audit table: 26 m world-frame drift over a
+// 12-frame gap with ego barely moving, almost certainly a different
+// physical object that Fix B's loose 25 m gate let through).
+//
+// The Mahalanobis gate uses each track's filter covariance to grade
+// "is this drift consistent with this track's accumulated uncertainty?"
+// A confident, recently-locked-on track should reject a 25 m drift;
+// the same drift would be acceptable for a long-Lost track whose P
+// has inflated by repeated noisy-measurement absorption.
+// -----------------------------------------------------------------------------
+TEST(SORTTrackerCascade, MahalanobisGateRejectsImplausibleConfidentRevival) {
+    // High-confidence track scenario: 30 frames of clean detection at
+    // (10, 0) drives the filter covariance way down. Then ~50 occluded
+    // frames (Live → Lost via max_misses=10), then a re-detection at
+    // (35, 0) — 25 m world-frame drift, well within the 25 m hard
+    // ceiling, but absurd given the filter's confidence. Without the
+    // Mahalanobis gate this would revive (Fix B behavior). With it,
+    // the Mahalanobis distance is huge (Δ = 25 m, σ_x maybe 0.3 m →
+    // d_mahal² ≈ 6900) and gets rejected.
+    SORTTracker tr(/*max_dist=*/5.0f,
+                   /*max_misses=*/10,
+                   /*min_hits=*/1,
+                   Solver::Munkres,
+                   tracker::Order::PredictThenUpdate,
+                   /*dt=*/0.1f,
+                   /*process_noise=*/0.01f,
+                   /*meas_noise=*/0.1f,
+                   tracker::FilterKind::CV,
+                   /*use_appearance=*/false,
+                   /*appearance_weight=*/0.0f,
+                   /*embedding_alpha=*/0.0f,
+                   /*max_age=*/100);
+
+    int original_id = -1;
+    for (int i = 0; i < 30; ++i) {
+        auto pub = step_one_det(tr, 10.0f, 0.0f);
+        ASSERT_EQ(pub.size(), 1u);
+        if (i == 0) original_id = pub[0].id;
+    }
+    // 50-frame occlusion: track goes Lost on miss 11.
+    for (int i = 0; i < 50; ++i) step_no_dets(tr);
+    // 25 m drift detection — within the 25 m hard ceiling, way outside
+    // the high-confidence track's covariance.
+    auto pub = step_one_det(tr, 35.0f, 0.0f);
+    // The implausible-distance detection should NOT revive the original
+    // track id. Either no track publishes (Lost track stays Lost,
+    // detection becomes a fresh track waiting for min_hits), or a fresh
+    // track with a different id publishes immediately. The guarantee is
+    // that the original confident track did not get teleported.
+    for (const auto& t : pub) {
+        EXPECT_NE(t.id, original_id)
+            << "Mahalanobis gate let a high-confidence track revive 25 m "
+            << "away — the gate is not active or the χ² threshold is too "
+            << "loose.";
+    }
+}
+
+TEST(SORTTrackerCascade, MahalanobisGateAcceptsConsistentRevival) {
+    // Companion test: the SAME 25 m drift but on a track whose covariance
+    // has inflated through fewer hits + a long Lost period would be
+    // accepted. Synthesizing an inflated-cov state directly is fragile
+    // (depends on tuning), so this test instead verifies the boundary
+    // case: a SHORT drift well within Mahalanobis tolerance still revives,
+    // which guards against the gate being so tight it kills all cascade
+    // (the Fix C failure mode).
+    SORTTracker tr(/*max_dist=*/5.0f,
                    /*max_misses=*/3,
                    /*min_hits=*/1,
                    Solver::Munkres,
@@ -519,6 +588,44 @@ TEST(SORTTrackerCascade, CascadeRevivalWithoutEgoMotionAnchorsToDecoy) {
                    /*dt=*/0.1f,
                    /*process_noise=*/0.01f,
                    /*meas_noise=*/0.1f,
+                   tracker::FilterKind::CV,
+                   /*use_appearance=*/false,
+                   /*appearance_weight=*/0.0f,
+                   /*embedding_alpha=*/0.0f,
+                   /*max_age=*/30);
+
+    int original_id = -1;
+    for (int i = 0; i < 5; ++i) {
+        auto pub = step_one_det(tr, 10.0f, 0.0f);
+        ASSERT_EQ(pub.size(), 1u);
+        if (i == 0) original_id = pub[0].id;
+    }
+    for (int i = 0; i < 10; ++i) step_no_dets(tr);
+    // Re-detection at (10, 0.5) — half a meter drift, comfortably inside
+    // any reasonable Mahalanobis gate. Should revive.
+    auto pub = step_one_det(tr, 10.0f, 0.5f);
+    ASSERT_EQ(pub.size(), 1u);
+    EXPECT_EQ(pub[0].id, original_id)
+        << "Mahalanobis gate rejected a 0.5 m revival on an established "
+        << "track — the gate is too tight (Fix C regression).";
+}
+
+// Pair to the test above: with T_world_ego left at Identity (the legacy
+// path / synthetic-data callers / pre-Fix-B behavior), the same scenario
+// silently revives onto the decoy cluster. This documents the bug Fix B
+// solves and guards against accidentally regressing the world-frame
+// projection back to ego-frame.
+TEST(SORTTrackerCascade, CascadeRevivalWithoutEgoMotionAnchorsToDecoy) {
+    // Production-realistic noise so the Mahalanobis gate behaves as it
+    // does on RELLIS. See note on the paired Fix B test above.
+    SORTTracker tr(/*max_dist=*/5.0f,
+                   /*max_misses=*/3,
+                   /*min_hits=*/1,
+                   Solver::Munkres,
+                   tracker::Order::PredictThenUpdate,
+                   /*dt=*/0.1f,
+                   /*process_noise=*/2.0f,
+                   /*meas_noise=*/0.3f,
                    tracker::FilterKind::CV,
                    /*use_appearance=*/false,
                    /*appearance_weight=*/0.0f,

@@ -55,6 +55,27 @@ class IFilter {
     virtual Eigen::Matrix4f covariance() const = 0;
     virtual float covariance_trace() const = 0;
 
+    // 2x2 position covariance for *gating* (Mahalanobis cascade match).
+    //
+    // Distinct from `covariance().topLeftCorner<2,2>()` because IMM's
+    // combined covariance includes the inter-mode spread term
+    // `(x_j - x_combined)(x_j - x_combined)^T` — correct for representing
+    // marginal posterior uncertainty under model disagreement, but wrong
+    // for gating, which asks "is this detection physically the same
+    // object?" rather than "where could it be under model uncertainty?"
+    //
+    // The cascade gate uses the MOST CONFIDENT sub-model's P_position —
+    // the tighter prediction. CV-only filters return the same as
+    // `covariance().topLeftCorner<2,2>()`; IMMFilter returns the
+    // sub-model with the smallest position cov-trace.
+    //
+    // Found via the post-Mahalanobis audit (2026-04-27): drive-wide
+    // revivals at 22–24 m world drift were leaking through because
+    // the combined IMM covariance ballooned during pre-Lost misses
+    // when CV and CP modes diverged. See docs/m10-debug-log.md
+    // "Mahalanobis post-mortem — IMM combined cov inflates the gate".
+    virtual Eigen::Matrix2f gating_position_covariance_2x2() const = 0;
+
     // Deep copy. Lets owners of `unique_ptr<IFilter>` be copyable — Track
     // holds a polymorphic filter and gets copied through SORTTracker's
     // publishing path (update() returns a snapshot vector). Virtual

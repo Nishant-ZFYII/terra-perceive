@@ -45,6 +45,12 @@ class KalmanFilter2D : public IFilter {
     Eigen::Matrix4f covariance() const override;
     float covariance_trace() const override;
 
+    // For a single-model CV filter the "most confident sub-model" is just
+    // itself, so the gating cov equals the standard top-left 2x2 block.
+    Eigen::Matrix2f gating_position_covariance_2x2() const override {
+        return P_.topLeftCorner<2, 2>();
+    }
+
     std::unique_ptr<IFilter> clone() const override {
         return std::make_unique<KalmanFilter2D>(*this);
     }

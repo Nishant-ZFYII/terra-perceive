@@ -185,26 +185,41 @@ echo "[rellis-tracker] SORT produced ${N_TRACKS} distinct track ids "
 echo "                across the whole sequence."
 
 # -----------------------------------------------------------------------------
-# Stage 3 — render closing-hero animation
+# Stage 3 — render closing-hero animation (OPT-IN, ~30 minutes on laptop)
 # -----------------------------------------------------------------------------
-echo "[rellis-tracker] rendering 3-panel closing-hero animation"
-"${PYTHON}" scripts/animate_tracker_vs_dbscan.py \
-    --lidar-dir       "${LIDAR_DIR}" \
-    --camera-dir      "${CAM_DIR}" \
-    --clusters-dir    "${CLUSTERS_DIR}" \
-    --tracks-csv      "${TRACKS_CSV}" \
-    --frame-start     0 \
-    --frame-end       "${LAST_FRAME}" \
-    --fps             10 \
-    --stride          5 \
-    --out-mp4         "${OUT_ROOT}/sort_vs_dbscan.mp4" \
-    --out-gif         "${OUT_ROOT}/sort_vs_dbscan.gif"
+# The 3-panel render is the blog asset, not the iteration loop. Default OFF
+# so a tracker tweak can be measured in seconds without burning CPU on a
+# rendering pass that's not part of the metric. Enable for the final
+# blog-quality run only:
+#     TP_M4_RENDER_ANIM=1 bash scripts/run_tracker_on_rellis.sh
+RENDER_ANIM="${TP_M4_RENDER_ANIM:-0}"
+if [[ "${RENDER_ANIM}" == "1" ]]; then
+    echo "[rellis-tracker] rendering 3-panel closing-hero animation"
+    "${PYTHON}" scripts/animate_tracker_vs_dbscan.py \
+        --lidar-dir       "${LIDAR_DIR}" \
+        --camera-dir      "${CAM_DIR}" \
+        --clusters-dir    "${CLUSTERS_DIR}" \
+        --tracks-csv      "${TRACKS_CSV}" \
+        --frame-start     0 \
+        --frame-end       "${LAST_FRAME}" \
+        --fps             10 \
+        --stride          5 \
+        --out-mp4         "${OUT_ROOT}/sort_vs_dbscan.mp4" \
+        --out-gif         "${OUT_ROOT}/sort_vs_dbscan.gif"
+    ANIM_MP4="${OUT_ROOT}/sort_vs_dbscan.mp4"
+    ANIM_GIF="${OUT_ROOT}/sort_vs_dbscan.gif"
+else
+    echo "[rellis-tracker] animation skipped (TP_M4_RENDER_ANIM=0)."
+    echo "                 Re-run with TP_M4_RENDER_ANIM=1 once metrics ship."
+    ANIM_MP4="(skipped)"
+    ANIM_GIF="(skipped)"
+fi
 
 echo
 echo "================ M4 closing-hero summary ================"
 echo "  Detections CSV : ${DET_CSV}"
 echo "  Tracks CSV     : ${TRACKS_CSV}"
 echo "  Distinct tracks: ${N_TRACKS}"
-echo "  Animation MP4  : ${OUT_ROOT}/sort_vs_dbscan.mp4"
-echo "  Animation GIF  : ${OUT_ROOT}/sort_vs_dbscan.gif"
+echo "  Animation MP4  : ${ANIM_MP4}"
+echo "  Animation GIF  : ${ANIM_GIF}"
 echo "==========================================================="
