@@ -79,3 +79,24 @@ semantic_modifiers:
   person: 0.0
   vehicle: 0.0
   unknown: 0.6
+
+# --- P2-M4 tracker (SORT) ---
+# Defaults consumed by tracker_runner unless overridden by CLI flags.
+# Solver: greedy is O(N*M) and order-dependent on ambiguous costs;
+#         munkres is O(N^3) and globally optimal. Default to greedy
+#         (fast, fine for sparse scenes); flip to munkres when scenes
+#         get dense or for ablation A.
+tracker:
+  solver: greedy           # greedy | munkres
+  max_dist: 3.0            # gating threshold in measurement units (m)
+  max_misses: 3            # consecutive misses before track is pruned
+  min_hits: 1              # consecutive hits before a track is publishable
+  dt: 0.1                  # seconds between frames
+  process_noise: 0.01      # KF Q diagonal (isotropic)
+  meas_noise: 0.1          # KF R diagonal (isotropic)
+  snapshot_every: 1        # 1 = per-frame snapshots; raise for scalar-only runs
+
+# --- DBSCAN for obstacle clustering (consumed by cluster_obstacles.py / M4.5) ---
+dbscan:
+  eps: 0.5                 # neighborhood radius in meters
+  min_points: 10           # minimum core-point density

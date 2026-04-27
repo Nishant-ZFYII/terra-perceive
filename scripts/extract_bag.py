@@ -18,7 +18,7 @@ from rosbags.typesys import Stores, get_typestore
 LIDAR_TOPIC = "/os1_cloud_node/points"
 
 
-def extract_frames(bag_path, out_dir, every=1, max_frames=None):
+def extract_frames(bag_path, out_dir, every=1, max_frames=None, start_id=0):
     os.makedirs(out_dir, exist_ok=True)
     typestore = get_typestore(Stores.ROS1_NOETIC)
 
@@ -54,10 +54,11 @@ def extract_frames(bag_path, out_dir, every=1, max_frames=None):
             valid = np.isfinite(xyzI).all(axis=1) & (np.linalg.norm(xyzI[:, :3], axis=1) > 0.1)
             xyzI  = xyzI[valid]
 
-            out_path = os.path.join(out_dir, f"{saved:06d}.bin")
+            out_path = os.path.join(out_dir, f"{saved + start_id:06d}.bin")
             xyzI.tofile(out_path)
             saved += 1
-            print(f"[{saved}] {out_path}  ({len(xyzI)} points)")
+            if saved % 100 == 0:
+                print(f"[{saved}] {out_path}  ({len(xyzI)} points)")
 
             if max_frames and saved >= max_frames:
                 break
@@ -74,6 +75,10 @@ if __name__ == "__main__":
                         help="Save every Nth frame (default: 1 = all)")
     parser.add_argument("--max",    type=int, default=None,
                         help="Maximum number of frames to save")
+    parser.add_argument("--start-id", type=int, default=0,
+                        help="Offset for output frame numbering "
+                             "(use to chain multiple bags into one directory)")
     args = parser.parse_args()
 
-    extract_frames(args.bag_path, args.out_dir, every=args.every, max_frames=args.max)
+    extract_frames(args.bag_path, args.out_dir, every=args.every,
+                   max_frames=args.max, start_id=args.start_id)

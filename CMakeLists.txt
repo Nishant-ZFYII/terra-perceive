@@ -50,11 +50,26 @@ target_link_libraries(safety_runner safety_supervisor Eigen3::Eigen)
 add_library(kalman_filter src/kalman_filter.cpp)
 target_link_libraries(kalman_filter Eigen3::Eigen)
 
+# Phase-3 M12: IMM (Interacting Multiple Model) filter sits next to KF and
+# shares the IFilter interface. Depends on kalman_filter because each IMM
+# sub-filter is a KalmanFilter2D.
+add_library(imm_filter src/imm_filter.cpp)
+target_link_libraries(imm_filter kalman_filter Eigen3::Eigen)
+
 add_library(hungarian src/hungarian.cpp)
 target_link_libraries(hungarian Eigen3::Eigen)
 
+add_library(dbscan src/dbscan.cpp)
+target_link_libraries(dbscan Eigen3::Eigen)
+
 add_library(sort_tracker src/sort_tracker.cpp)
-target_link_libraries(sort_tracker kalman_filter hungarian Eigen3::Eigen)
+target_link_libraries(sort_tracker kalman_filter imm_filter hungarian Eigen3::Eigen)
+
+# Phase-3 M13: Deep SORT-style appearance encoder. Standalone library — does
+# NOT yet link into sort_tracker. Wiring happens in M13 week 3 (Mon 05-11)
+# after training completes and weights have been validated.
+add_library(appearance_encoder src/appearance_encoder.cpp)
+target_link_libraries(appearance_encoder Eigen3::Eigen)
 
 # --- Phase 2-M2: SLAM libraries (from scratch) ---
 
@@ -88,6 +103,20 @@ target_link_libraries(accumulator_runner
     world_grid traversability pose_graph_slam
     point_cloud_loader ransac_ground_seg
     so3 imu_preintegration Eigen3::Eigen)
+
+# --- P2-M4 tracker runner ---
+add_executable(tracker_runner src/tracker_runner.cpp)
+target_link_libraries(tracker_runner
+    sort_tracker hungarian kalman_filter Eigen3::Eigen)
+
+# --- P2-M4 obstacle extractor (RELLIS .bin → obstacle CSVs for Ablation G) ---
+add_executable(obstacle_extractor src/obstacle_extractor.cpp)
+target_link_libraries(obstacle_extractor
+    ransac_ground_seg point_cloud_loader Eigen3::Eigen)
+
+# --- P2-M4 DBSCAN CLI (drives Ablation G's eps × min_points sweep) ---
+add_executable(dbscan_cli src/dbscan_cli.cpp)
+target_link_libraries(dbscan_cli dbscan Eigen3::Eigen)
 
 add_library(g2o_wrapper src/g2o_wrapper.cpp)
 target_link_libraries(g2o_wrapper pose_graph_slam Eigen3::Eigen
@@ -144,11 +173,26 @@ if(BUILD_TESTING)
     ament_add_gtest(test_kalman tests/cpp/test_kalman.cpp)
     target_link_libraries(test_kalman kalman_filter)
 
+    # Phase-3 M12: 7 tests covering mixing, mode-update, combined output.
+    # Skeleton in place; YOUR CODE blocks in tests/cpp/test_imm.cpp will be
+    # filled in across days 2-4 of M12 alongside the imm_filter implementation.
+    ament_add_gtest(test_imm tests/cpp/test_imm.cpp)
+    target_link_libraries(test_imm imm_filter kalman_filter)
+
+    # Phase-3 M13: appearance encoder tests. Skeleton in place; YOUR CODE
+    # blocks in tests/cpp/test_appearance_encoder.cpp will be filled in
+    # alongside src/appearance_encoder.cpp::encode().
+    ament_add_gtest(test_appearance_encoder tests/cpp/test_appearance_encoder.cpp)
+    target_link_libraries(test_appearance_encoder appearance_encoder)
+
     ament_add_gtest(test_hungarian tests/cpp/test_hungarian.cpp)
     target_link_libraries(test_hungarian hungarian)
 
     ament_add_gtest(test_sort_tracker tests/cpp/test_sort_tracker.cpp)
     target_link_libraries(test_sort_tracker sort_tracker)
+
+    ament_add_gtest(test_dbscan tests/cpp/test_dbscan.cpp)
+    target_link_libraries(test_dbscan dbscan)
 
     ament_add_gtest(test_loader tests/cpp/test_loader.cpp WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     target_link_libraries(test_loader point_cloud_loader)
