@@ -3,20 +3,30 @@
 //
 // References:
 //   Bewley et al., "Simple Online and Realtime Tracking" (ICIP 2016).
+//   Wojke et al.,  "Simple Online and Realtime Tracking with a Deep
+//                   Association Metric" (ICIP 2017) — appearance term in
+//                   the cost matrix; this file's M13 integration mirrors
+//                   §3 of that paper.
 //
 // Implementation notes:
 //   - This file implements the per-frame state machine described in
 //     sort_tracker.hpp's "Pipeline per call to update()".
-//   - The Track struct embeds a KalmanFilter2D with no default constructor.
-//     New tracks are brace-initialized with a freshly built KF, then
-//     immediately .init()-seeded at the detection position.
+//   - Track holds its filter via std::unique_ptr<IFilter> (not an inline
+//     value), so SORTTracker can swap in a CV KF or an IMM at runtime.
+//     New tracks are default-constructed, then `filter` is assigned a
+//     freshly built filter from the make_filter() factory and immediately
+//     init()-seeded at the detection position.
 //   - Order of pruning vs new-track creation matters: prune AFTER matching
 //     is complete and AFTER unmatched-track misses are incremented. New
 //     tracks must be appended only AFTER pruning, otherwise their indices
 //     in tracks_ would shift mid-iteration.
+//   - P3-M13 adds an appearance term to the cost matrix and a per-track
+//     embedding running-mean. Both are gated by `use_appearance_`; when
+//     false, the file's behavior is bit-identical to the M12 path.
 
 #include "sort_tracker.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <memory>
 #include <set>
@@ -40,7 +50,6 @@ std::unique_ptr<IFilter> make_filter(FilterKind kind,
         case FilterKind::IMM:
             return std::make_unique<IMMFilter>(dt, process_noise, meas_noise);
     }
-    // Unreachable; silences -Wreturn-type on some compilers.
     return std::make_unique<KalmanFilter2D>(dt, process_noise, meas_noise);
 }
 }  // namespace
@@ -56,7 +65,11 @@ SORTTracker::SORTTracker(float max_dist,
                          float dt,
                          float process_noise,
                          float meas_noise,
-                         FilterKind filter_kind)
+                         FilterKind filter_kind,
+                         bool  use_appearance,
+                         float appearance_weight,
+                         float embedding_alpha,
+                         int   max_age)
     : max_dist_(max_dist),
       max_misses_(max_misses),
       min_hits_(min_hits),
@@ -65,198 +78,309 @@ SORTTracker::SORTTracker(float max_dist,
       process_noise_(process_noise),
       meas_noise_(meas_noise),
       order_(order),
-      filter_kind_(filter_kind) {}
+      filter_kind_(filter_kind),
+      use_appearance_(use_appearance),
+      appearance_weight_(appearance_weight),
+      embedding_alpha_(embedding_alpha),
+      encoder_(),
+      max_age_(max_age) {}
 
 // =============================================================================
 // match — build the NxM cost matrix and dispatch to the configured solver.
 //
-// rows of the cost matrix = current live tracks (in tracks_ order)
-// cols = detections (in dets order)
-// cost(i, j) = euclidean distance from predicted position of track_i to det_j
+// Cost matrix layout:
+//   rows = current live tracks (in tracks_ order)
+//   cols = detections (in dets order)
+//
+// Pure-position case (M4/M12, use_appearance_ = false):
+//   cost(i, j) = ‖predicted_pos(track_i) − det_pos(j)‖   (meters)
+//   Solver gates by max_dist_ in meters. Same as before M13.
+//
+// Position+appearance case (P3-M13, use_appearance_ = true):
+//   d_pos(i, j)  = ‖p_i − z_j‖ / max_dist_              ∈ [0, ~1]
+//   d_emb(i, j)  = 1 − e_track_i · e_det_j              ∈ [0, 2]
+//   cost(i, j)   = (1 − λ) · d_pos + λ · d_emb           ∈ [0, ~1.5]
+//   Solver gating threshold is 1.0 (one normalized "track-radius") in
+//   this case rather than max_dist_ — the cost is unitless after
+//   normalization. We still post-filter on the underlying physical
+//   distance d_pos · max_dist_ ≤ max_dist_ to retain Bewley's gate.
 //
 // Note: this is called AFTER predict() has been run on every track, so the
-// "position" we read from each track's KF is the predicted (a-priori) one.
+// "position" we read from each track's filter is the predicted (a-priori) one.
 // =============================================================================
-std::vector<std::pair<int, int>> SORTTracker::match(
-    const std::vector<Eigen::Vector2f>& dets) {
-    // YOUR CODE:
-    //   1. const int N = static_cast<int>(tracks_.size());
-    //      const int M = static_cast<int>(dets.size());
-    //      if (N == 0 || M == 0) return {};
-    //   2. Build cost matrix:
-    //        Eigen::MatrixXf cost(N, M);
-    //        for (int i = 0; i < N; ++i) {
-    //            const Eigen::Vector2f p = tracks_[i].kf.position();
-    //            for (int j = 0; j < M; ++j) {
-    //                cost(i, j) = (p - dets[j]).norm();
-    //            }
-    //        }
-    //   3. return hungarian_solve(cost, solver_, max_dist_);
-    //
-    // The dispatcher handles greedy vs Munkres internally — match() does not
-    // care which solver is in use. That isolation is the entire reason the
-    // Solver enum exists.
-    const int N = static_cast<int>(tracks_.size());
-    const int M = static_cast<int>(dets.size());
+// =============================================================================
+// match_subset — build cost matrix + solve for one stage of cascade matching.
+// =============================================================================
+std::vector<std::pair<int, int>> SORTTracker::match_subset(
+    const std::vector<int>& track_indices,
+    const std::vector<int>& det_indices,
+    const std::vector<Detection>& dets,
+    const std::vector<Embedding>& det_embeddings,
+    bool use_lost_pos) {
+    const int N = static_cast<int>(track_indices.size());
+    const int M = static_cast<int>(det_indices.size());
     if (N == 0 || M == 0) return {};
-    Eigen::MatrixXf cost(N, M);
+
+    // Build per-pair physical position distance.
+    //
+    // Fix B: when use_lost_pos=true, the track's lost_pos_world is in the
+    // WORLD frame, but detections live in the CURRENT ego frame. We project
+    // the world-frame anchor back into current-ego with T_world_ego_.inverse()
+    // before computing distance. T_ego_world is the same matrix per update()
+    // call, so we compute it once.
+    const Eigen::Isometry2f T_ego_world = T_world_ego_.inverse();
+
+    Eigen::MatrixXf d_pos_phys(N, M);
     for (int i = 0; i < N; ++i) {
-        const Eigen::Vector2f p = tracks_[i].filter->position();
+        const Track& t = tracks_[track_indices[i]];
+        // Lost stage: project world-frame frozen position back into the
+        //   current ego frame, then gate against detections.
+        // Live stage: use filter->position() — already in current ego
+        //   frame (the predicted a-priori position after Section 1).
+        const Eigen::Vector2f p = use_lost_pos
+                                      ? Eigen::Vector2f(T_ego_world * t.lost_pos_world)
+                                      : t.filter->position();
         for (int j = 0; j < M; ++j) {
-            cost(i, j) = (p - dets[j]).norm();
+            d_pos_phys(i, j) = (p - dets[det_indices[j]].position).norm();
         }
     }
-    auto pairs = hungarian_solve(cost, solver_, max_dist_);
+
+    // Position gate. Lost stage relaxes by kLostPosGateScale because the
+    // frozen position has aged by lost_age frames; appearance does the
+    // real disambiguation in this stage.
+    const float pos_gate = use_lost_pos
+                               ? max_dist_ * kLostPosGateScale
+                               : max_dist_;
+
+    // Combined cost. When appearance is off and we're in the Lost stage,
+    // we still allow the relaxed position match — that lets the
+    // implementation degrade gracefully when no encoder is available
+    // (max_misses=300 + max_age=100 still catches some rebirths).
+    Eigen::MatrixXf cost(N, M);
+    float solver_gate;
+    if (!use_appearance_) {
+        cost = d_pos_phys;
+        solver_gate = pos_gate;
+    } else {
+        for (int i = 0; i < N; ++i) {
+            const Embedding& e_t = tracks_[track_indices[i]].embedding;
+            for (int j = 0; j < M; ++j) {
+                const float dp = d_pos_phys(i, j) / pos_gate;
+                const float de = 1.0f - e_t.dot(det_embeddings[det_indices[j]]);
+                cost(i, j) = (1.0f - appearance_weight_) * dp
+                           + appearance_weight_         * de;
+            }
+        }
+        solver_gate = 1.0f;
+    }
+
+    auto raw_pairs = hungarian_solve(cost, solver_, solver_gate);
+
+    // Two-step gate: cost-matrix gate (already enforced by solver) AND
+    // physical-distance gate (in meters). The physical gate stops a Lost
+    // track + new detection that happen to have similar appearance from
+    // matching across the entire scene — appearance is a tiebreaker, not
+    // a teleporter.
     std::vector<std::pair<int, int>> gated;
-    gated.reserve(pairs.size());
-    for (auto [ti, dj] : pairs) {
-        if (cost(ti, dj) <= max_dist_){
-            gated.push_back({ti, dj});
+    gated.reserve(raw_pairs.size());
+    for (auto [li, lj] : raw_pairs) {
+        if (cost(li, lj) <= solver_gate && d_pos_phys(li, lj) <= pos_gate) {
+            gated.emplace_back(track_indices[li], det_indices[lj]);
         }
     }
     return gated;
 }
 
 // =============================================================================
-// update — one frame of the tracker.
-//
-// Bewley's pipeline, broken into named sections you can step through with a
-// debugger. Mind the iteration-order traps marked with ⚠.
+// match — two-stage cascade: Live tracks first, then Lost tracks on the
+// remaining detections (P3.5).
 // =============================================================================
-std::vector<Track> SORTTracker::update(
-    const std::vector<Eigen::Vector2f>& detections,
-    const std::vector<int>& class_ids) {
-    // ---- Section 1: PREDICT every existing track. -----------------------
-    //
-    // YOUR CODE:
-    //   for (auto& t : tracks_) t.kf.predict();
-    //
-    // After this, t.kf.position() is the a-priori (predicted) position used
-    // by match() to build the cost matrix.
+std::vector<std::pair<int, int>> SORTTracker::match(
+    const std::vector<Detection>& dets,
+    const std::vector<Embedding>& det_embeddings) {
+    const int N = static_cast<int>(tracks_.size());
+    const int M = static_cast<int>(dets.size());
+    if (N == 0 || M == 0) return {};
 
-    // ---- Section 2: MATCH (build cost matrix, call solver). --------------
-    //
-    // YOUR CODE:
-    //   const auto pairs = match(detections);
-    //
-    // pairs is a list of (track_idx, det_idx). Both indices reference the
-    // CURRENT tracks_ vector and the detections argument respectively.
-
-    // ---- Section 3: UPDATE each matched track. --------------------------
-    //
-    // We need to know which tracks and which detections were matched, to
-    // figure out who's "unmatched" in sections 4 and 5.
-    //
-    // YOUR CODE:
-    //   std::set<int> matched_tracks, matched_dets;
-    //   for (auto [ti, dj] : pairs) {
-    //       const auto& z = detections[dj];
-    //       tracks_[ti].kf.update(z.x(), z.y());
-    //       tracks_[ti].hits  += 1;
-    //       tracks_[ti].misses = 0;
-    //       matched_tracks.insert(ti);
-    //       matched_dets  .insert(dj);
-    //   }
-
-    // ---- Section 4: increment MISSES on unmatched tracks. ---------------
-    //
-    // YOUR CODE:
-    //   for (int i = 0; i < static_cast<int>(tracks_.size()); ++i) {
-    //       if (matched_tracks.count(i) == 0) {
-    //           tracks_[i].misses += 1;
-    //           tracks_[i].hits    = 0;   // optional: reset hits on miss.
-    //                                     // SORT spec is ambiguous; the
-    //                                     // reference impl resets. Pick one
-    //                                     // and document in the blog.
-    //       }
-    //   }
-
-    // ---- Section 5: PRUNE tracks with too many misses. ------------------
-    //
-    // ⚠ Erase-remove idiom — std::erase_if (C++20) is cleanest. If you're on
-    // C++17, use the std::remove_if + tracks_.erase combo.
-    //
-    // YOUR CODE (C++20 form):
-    //   std::erase_if(tracks_, [this](const Track& t) {
-    //       return t.misses > max_misses_;
-    //   });
-    //
-    // YOUR CODE (C++17 form):
-    //   tracks_.erase(
-    //       std::remove_if(tracks_.begin(), tracks_.end(),
-    //                      [this](const Track& t) { return t.misses > max_misses_; }),
-    //       tracks_.end());
-
-    // ---- Section 6: CREATE new tracks for unmatched detections. ---------
-    //
-    // ⚠ Append AFTER pruning (section 5). If you append before, the indices
-    // in matched_tracks become invalid because section-5 erase shifts later
-    // entries down.
-    //
-    // YOUR CODE:
-    //   for (int j = 0; j < static_cast<int>(detections.size()); ++j) {
-    //       if (matched_dets.count(j) > 0) continue;
-    //       const int cls = (j < static_cast<int>(class_ids.size()))
-    //                       ? class_ids[j]
-    //                       : 0;
-    //       Track t{
-    //           /*id=*/      next_id_++,
-    //           /*kf=*/      KalmanFilter2D(dt_, process_noise_, meas_noise_),
-    //           /*hits=*/    1,
-    //           /*misses=*/  0,
-    //           /*class_id=*/cls,
-    //           /*z_3d=*/    0.0f,
-    //       };
-    //       t.kf.init(detections[j].x(), detections[j].y());
-    //       tracks_.push_back(std::move(t));
-    //   }
-
-    // ---- Section 7: RETURN only PUBLISHABLE tracks (hits >= min_hits). --
-    //
-    // The full tracks_ vector is the tracker's internal state and is kept
-    // alive. The return value is the filtered "for downstream consumption"
-    // view. tracker_runner will log both — internal state for debugging,
-    // returned vector for metrics.
-    //
-    // YOUR CODE:
-    //   std::vector<Track> publishable;
-    //   publishable.reserve(tracks_.size());
-    //   for (const auto& t : tracks_) {
-    //       if (t.hits >= min_hits_) publishable.push_back(t);
-    //   }
-    //   return publishable;
-    
-    // ---- Section 1: PREDICT every existing track. -----------------------
-    if (order_ == Order::PredictThenUpdate) {
-        for (auto& t : tracks_) t.filter->predict();
+    // Partition tracks by state.
+    std::vector<int> live_idx, lost_idx;
+    live_idx.reserve(N);
+    lost_idx.reserve(N);
+    for (int i = 0; i < N; ++i) {
+        if (tracks_[i].state == TrackState::Live) live_idx.push_back(i);
+        else                                       lost_idx.push_back(i);
     }
 
-    // ---- Section 2: MATCH (build cost matrix, call solver). --------------
-    const auto pairs = match(detections);
+    // All det indices to start.
+    std::vector<int> all_dets(M);
+    for (int j = 0; j < M; ++j) all_dets[j] = j;
+
+    // Stage 1: Live tracks against all detections. Standard cost matrix.
+    auto live_pairs = match_subset(live_idx, all_dets, dets, det_embeddings,
+                                   /*use_lost_pos=*/false);
+
+    // Stage 2: Lost tracks against UNMATCHED detections only, with
+    // relaxed position gating + appearance-weighted cost.
+    std::vector<std::pair<int, int>> all_pairs = live_pairs;
+    if (!lost_idx.empty()) {
+        std::set<int> matched_dets;
+        for (auto [_, dj] : live_pairs) matched_dets.insert(dj);
+        std::vector<int> unmatched_dets;
+        unmatched_dets.reserve(M - matched_dets.size());
+        for (int j = 0; j < M; ++j) {
+            if (matched_dets.count(j) == 0) unmatched_dets.push_back(j);
+        }
+        auto lost_pairs = match_subset(lost_idx, unmatched_dets,
+                                       dets, det_embeddings,
+                                       /*use_lost_pos=*/true);
+        all_pairs.insert(all_pairs.end(), lost_pairs.begin(), lost_pairs.end());
+    }
+    return all_pairs;
+}
+
+// =============================================================================
+// update_with_features (M13 primary — full Detection input).
+//
+// The Bewley pipeline, with the M13 appearance hooks marked YOUR CODE.
+// Distinct name from update() to avoid brace-init overload ambiguity
+// that broke compilation of `tracker.update({}, {})` style test calls.
+// =============================================================================
+std::vector<Track> SORTTracker::update_with_features(
+    const std::vector<Detection>& detections,
+    const std::vector<int>& class_ids,
+    const Eigen::Isometry2f& T_world_ego) {
+    // Fix B: stash the per-frame world←ego transform so match_subset() can
+    // reach it without threading it through every helper signature. Reset
+    // every frame; defaults to Identity for callers that don't supply a pose.
+    T_world_ego_ = T_world_ego;
+
+    // Compute per-detection embeddings once for this frame. Skipped when
+    // appearance is off, so the M4/M12 path pays no cost.
+    std::vector<Embedding> det_embeddings;
+    if (use_appearance_) {
+        det_embeddings.reserve(detections.size());
+        for (const auto& d : detections) {
+            det_embeddings.push_back(encoder_.encode(d.features));
+        }
+    }
+
+    // ---- Section 1: PREDICT every LIVE track ----------------------------
+    // Lost tracks have frozen position (lost_pos); we deliberately skip
+    // their predict() so their position doesn't drift while waiting for
+    // re-association. They re-enter the predict-update loop on revival.
+    if (order_ == Order::PredictThenUpdate) {
+        for (auto& t : tracks_) {
+            if (t.state == TrackState::Live) t.filter->predict();
+        }
+    }
+
+    // ---- Section 2: MATCH (two-stage cascade: Live first, then Lost) ---
+    const auto pairs = match(detections, det_embeddings);
+
     // ---- Section 3: UPDATE each matched track. --------------------------
+    // If the match was on a Lost track (cascade stage 2 hit), revive it:
+    // re-init the filter at the matched position (the frozen filter has
+    // stale state) and transition state Lost → Live. Track ID and
+    // appearance embedding are preserved; this is exactly the cascade-
+    // matching contribution — same physical thing, same ID, after a
+    // potentially long occlusion gap.
     std::set<int> matched_tracks, matched_dets;
     for (auto [ti, dj] : pairs) {
-        const auto& z = detections[dj];
-        tracks_[ti].filter->update(z.x(), z.y());
-        tracks_[ti].hits  += 1;
-        tracks_[ti].misses = 0;
+        const auto& z = detections[dj].position;
+        Track& t = tracks_[ti];
+        if (t.state == TrackState::Lost) {
+            // Revive: re-init the filter at the new measurement.
+            t.filter->init(z.x(), z.y());
+            t.state    = TrackState::Live;
+            t.lost_age = 0;
+        } else {
+            t.filter->update(z.x(), z.y());
+        }
+        t.hits  += 1;
+        t.misses = 0;
+
+        // ─────────────────────────────────────────────────────────────
+        // YOUR CODE — running-mean embedding update for this track.
+        //
+        // When appearance is on, blend the detection's embedding into
+        // the track's stored embedding using exponential moving average:
+        //    e_track ← (1−α) · e_track + α · e_det
+        // then re-normalize to unit length so subsequent cosine-similarity
+        // comparisons stay valid.
+        //
+        //   if (use_appearance_) {
+        //       Embedding e = (1.0f - embedding_alpha_) * tracks_[ti].embedding
+        //                   + embedding_alpha_         * det_embeddings[dj];
+        //       const float n = e.norm();
+        //       if (n > 1e-12f) e /= n;
+        //       tracks_[ti].embedding = e;
+        //   }
+        //
+        // α (Wojke 2017): default 0.1. Higher α = track follows the most
+        // recent detection's appearance closely; lower α = track holds
+        // its long-term mean (more robust to occlusion-time appearance
+        // shift, slower to adapt to legitimate drift).
+        // ─────────────────────────────────────────────────────────────
+        if (use_appearance_) {
+            Embedding e = (1.0f - embedding_alpha_) * tracks_[ti].embedding
+                        + embedding_alpha_         * det_embeddings[dj];
+            const float n = e.norm();
+            if (n > 1e-12f) e /= n;
+            tracks_[ti].embedding = e;
+        }
         matched_tracks.insert(ti);
         matched_dets  .insert(dj);
     }
+
     // ---- Section 4: increment MISSES on unmatched tracks. ---------------
+    // Live unmatched: bump misses. If misses exceeds max_misses, transition
+    //   Live → Lost and freeze position at the current filter state.
+    // Lost unmatched: bump lost_age (Lost tracks don't accumulate misses;
+    //   they were already over the threshold).
     for (int i = 0; i < static_cast<int>(tracks_.size()); ++i) {
-        if (matched_tracks.count(i) == 0) {
-            tracks_[i].misses += 1;
-            tracks_[i].hits    = 0;   // optional: reset hits on miss.
-                                      // SORT spec is ambiguous; the reference impl resets. Pick one
-                                      // and document in the blog.  
+        if (matched_tracks.count(i) > 0) continue;
+        Track& t = tracks_[i];
+        if (t.state == TrackState::Live) {
+            t.misses += 1;
+            t.hits    = 0;
+            if (t.misses > max_misses_) {
+                t.state          = TrackState::Lost;
+                // Fix B: store the freeze position in WORLD frame so it
+                // remains physically meaningful after ego translates. The
+                // filter's position() is in current ego frame; T_world_ego_
+                // takes it to world.
+                t.lost_pos_world = T_world_ego_ * t.filter->position();
+                t.lost_age       = 0;
+            }
+        } else {
+            // Already Lost — age it.
+            t.lost_age += 1;
         }
     }
-    // ---- Section 5: PRUNE tracks with too many misses. ------------------
-    tracks_.erase(
-        std::remove_if(tracks_.begin(), tracks_.end(),
-                       [this](const Track& t) { return t.misses > max_misses_; }),
-        tracks_.end());
+
+    // ---- Section 5: PRUNE final-erased tracks ---------------------------
+    // Two erase conditions:
+    //   (a) max_age_ == 0  → cascade matching DISABLED. Erase any track
+    //       whose misses crossed max_misses (legacy P3-M13 behavior).
+    //   (b) max_age_ > 0   → cascade matching ENABLED. Lost tracks stay
+    //       in tracks_ until lost_age > max_age_, then erase. Live tracks
+    //       never erase here (they erase via state transition + age).
+    if (max_age_ > 0) {
+        tracks_.erase(
+            std::remove_if(tracks_.begin(), tracks_.end(),
+                [this](const Track& t) {
+                    return t.state == TrackState::Lost && t.lost_age > max_age_;
+                }),
+            tracks_.end());
+    } else {
+        tracks_.erase(
+            std::remove_if(tracks_.begin(), tracks_.end(),
+                [this](const Track& t) {
+                    return t.state == TrackState::Lost;   // any Lost = prune
+                }),
+            tracks_.end());
+    }
+
     // ---- Section 6: CREATE new tracks for unmatched detections. ---------
     for (int j = 0; j < static_cast<int>(detections.size()); ++j) {
         if (matched_dets.count(j) > 0) continue;
@@ -270,21 +394,73 @@ std::vector<Track> SORTTracker::update(
         t.misses    = 0;
         t.class_id  = cls;
         t.z_3d      = 0.0f;
-        t.filter->init(detections[j].x(), detections[j].y());
+        t.filter->init(detections[j].position.x(), detections[j].position.y());
+
+        // ─────────────────────────────────────────────────────────────
+        // YOUR CODE — embedding init for a new track.
+        //
+        // Seed the new track's embedding with this detection's embedding.
+        // The running-mean update in Section 3 won't run on this track
+        // until next frame, so without this init the embedding stays at
+        // its default (zero), and matching against this track via cosine
+        // will return 1.0 (since dot of zero with anything is zero,
+        // 1 - 0 = 1 → maximally dissimilar). That kills appearance-aided
+        // matching for the entire first second of a new track's life.
+        //
+        //   if (use_appearance_) {
+        //       t.embedding = det_embeddings[j];
+        //   }
+        // ─────────────────────────────────────────────────────────────
+        if (use_appearance_) {
+            t.embedding = det_embeddings[j];
+        }
+
         tracks_.push_back(std::move(t));
     }
+
     // ---- Section 7: RETURN only PUBLISHABLE tracks (hits >= min_hits). --
+    // Lost tracks are not published (they have stale state until revived);
+    // only Live tracks reach downstream consumers.
     std::vector<Track> publishable;
     publishable.reserve(tracks_.size());
     for (const auto& t : tracks_) {
-        if (t.hits >= min_hits_) publishable.push_back(t);    
+        if (t.state == TrackState::Live && t.hits >= min_hits_) {
+            publishable.push_back(t);
+        }
     }
 
-    //section 8 only if order::UpdateThenPredict
+    // section 8 — UpdateThenPredict variant runs predict AFTER update.
+    // Same Live-only restriction.
     if (order_ == Order::UpdateThenPredict) {
-        for (auto& t : tracks_) t.filter->predict();
+        for (auto& t : tracks_) {
+            if (t.state == TrackState::Live) t.filter->predict();
+        }
     }
-    return publishable; 
+    return publishable;
+}
+
+// =============================================================================
+// update (M4-shim — Vector2f overload).
+//
+// Existing call sites (M4 unit tests, ros2_nodes/tracker_node.cpp, the
+// non-appearance branch of tracker_runner) pass plain (x, y) detections.
+// Build empty-feature Detections and forward to update_with_features().
+// When use_appearance_ is false (the default), the empty features are
+// never read.
+// =============================================================================
+std::vector<Track> SORTTracker::update(
+    const std::vector<Eigen::Vector2f>& detections,
+    const std::vector<int>& class_ids,
+    const Eigen::Isometry2f& T_world_ego) {
+    std::vector<Detection> dets;
+    dets.reserve(detections.size());
+    for (const auto& p : detections) {
+        Detection d;
+        d.position = p;
+        d.features = FeatureVector::Zero();
+        dets.push_back(std::move(d));
+    }
+    return update_with_features(dets, class_ids, T_world_ego);
 }
 
 }  // namespace tracker

@@ -34,6 +34,7 @@ rsync -avz --progress \
     --exclude 'install/' \
     --exclude 'log/' \
     --exclude 'results_m4/' \
+    --exclude 'data' \
     --exclude 'data/' \
     --exclude '.git/' \
     --exclude '__pycache__/' \

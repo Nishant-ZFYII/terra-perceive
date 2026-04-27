@@ -19,14 +19,55 @@ cd "${REPO_ROOT}"
 
 EXT_ROOT="${TP_M4_EXT_ROOT:-/media/nishant/SeeGayt2/terra_perceive/m4_perframe}"
 CLUSTERS_DIR="${EXT_ROOT}/clusters_sweetspot"
+FEATURES_DIR="${EXT_ROOT}/appearance"
 LIDAR_DIR="data/extracted_frames_full"
 CAM_DIR="${EXT_ROOT}/extracted_frames_camera"
 OBSTACLES_DIR="${EXT_ROOT}/obstacles"
 
 OUT_ROOT="results_m4/ablation_g"
 DET_CSV="${OUT_ROOT}/rellis_detections.csv"
+FEAT_CSV="${OUT_ROOT}/rellis_detections.features.csv"
 TRACK_OUT="${OUT_ROOT}/sort_on_rellis"
 TRACKS_CSV="${TRACK_OUT}/tracks.csv"
+
+# P3-M13: enable appearance via env var; defaults to OFF (M12 path).
+#     TP_M4_USE_APPEARANCE=1 bash scripts/run_tracker_on_rellis.sh
+# Optionally tune:
+#     TP_M4_APPEARANCE_WEIGHT=0.6 ...
+#
+# λ default lowered from 0.4 → 0.2 after the M13 RELLIS λ sweep
+# (see docs/m10-debug-log.md "λ sweep at max_misses=300"). 0.2 was the
+# minimum-distinct-IDs operating point at the recommended max_misses=300
+# config; 0.4 over-weighted the encoder and regressed.
+USE_APPEARANCE="${TP_M4_USE_APPEARANCE:-0}"
+APPEARANCE_WEIGHT="${TP_M4_APPEARANCE_WEIGHT:-0.2}"
+EMBEDDING_ALPHA="${TP_M4_EMBEDDING_ALPHA:-0.1}"
+# Phase-3.5 cascade matching: keep dying tracks alive in a retired pool
+# for max_age frames after they exceed max_misses.
+#
+# Fix B (shipped): cascade's frozen position is now stored in WORLD
+# frame using the P2-M2 SLAM ego pose, and the per-frame match step
+# transforms it back into current-ego coordinates before gating. With
+# ego motion accounted for, max_age=300 (30 sec) is honest again — Lost
+# tracks revive only when a re-detection lands at the actual physical
+# position they were last seen, not at any cluster that happens to land
+# at similar ego-relative coordinates after ego has driven away.
+#
+# History:
+#   max_age=300, ego-frame anchor (pre-Fix-B):  99 distinct  — ARTIFACT,
+#       18/35 stationary tracks were false-merge revivals up to 15.7 m apart
+#   max_age=30,  ego-frame anchor (defensive Fix A):       202 distinct
+#       3-second ego validity ≈ ~5 m drift, false revivals minimized
+#   max_age=300, world-frame anchor (Fix B):              <honest_number>
+#       cascade reaches across long gaps but only at the right physical place
+#
+# Override:
+#   TP_M4_MAX_MISSES=10 TP_M4_MAX_AGE=300 bash scripts/run_tracker_on_rellis.sh
+#   TP_M4_MAX_AGE=0  bash ...    # disable cascade entirely
+#   TP_M4_EGO_POSES= bash ...    # disable Fix B (ego-frame anchor, legacy)
+MAX_MISSES="${TP_M4_MAX_MISSES:-10}"
+MAX_AGE="${TP_M4_MAX_AGE:-300}"
+EGO_POSES_CSV="${TP_M4_EGO_POSES:-data/poses_slam_full.csv}"
 
 RUNNER="./build/construction_perception/tracker_runner"
 PYTHON="${PYTHON:-python3}"
@@ -45,15 +86,37 @@ LAST_FRAME=${LAST_FRAME:-0}
 echo "[rellis-tracker] using frames 0..${LAST_FRAME}"
 
 # -----------------------------------------------------------------------------
-# Stage 1 — clusters → detections CSV
+# Stage 1 — clusters → detections CSV (+ features CSV if appearance is on)
 # -----------------------------------------------------------------------------
-if [[ ! -f "${DET_CSV}" ]]; then
+NEED_FEATURES_REGEN=0
+if [[ "${USE_APPEARANCE}" == "1" && ! -f "${FEAT_CSV}" ]]; then
+    NEED_FEATURES_REGEN=1
+fi
+
+if [[ ! -f "${DET_CSV}" || "${NEED_FEATURES_REGEN}" == "1" ]]; then
     echo "[rellis-tracker] converting cluster centroids → detections CSV"
-    "${PYTHON}" scripts/clusters_to_detections.py \
-        --clusters-dir "${CLUSTERS_DIR}" \
-        --frame-start  0 \
-        --frame-end    "${LAST_FRAME}" \
-        --out          "${DET_CSV}"
+    if [[ "${USE_APPEARANCE}" == "1" ]]; then
+        if [[ ! -d "${FEATURES_DIR}" ]] || [[ ! -f "${FEATURES_DIR}/corpus_stats.json" ]]; then
+            echo "ERROR: --use-appearance needs ${FEATURES_DIR}/corpus_stats.json"
+            echo "       run: python python/appearance/extract_features.py \\"
+            echo "           --clusters-dir ${CLUSTERS_DIR} \\"
+            echo "           --out-dir ${FEATURES_DIR} --workers 8"
+            exit 1
+        fi
+        "${PYTHON}" scripts/clusters_to_detections.py \
+            --clusters-dir "${CLUSTERS_DIR}" \
+            --features-dir "${FEATURES_DIR}" \
+            --frame-start  0 \
+            --frame-end    "${LAST_FRAME}" \
+            --out          "${DET_CSV}" \
+            --features-out "${FEAT_CSV}"
+    else
+        "${PYTHON}" scripts/clusters_to_detections.py \
+            --clusters-dir "${CLUSTERS_DIR}" \
+            --frame-start  0 \
+            --frame-end    "${LAST_FRAME}" \
+            --out          "${DET_CSV}"
+    fi
 else
     echo "[rellis-tracker] reusing cached ${DET_CSV}"
 fi
@@ -75,19 +138,39 @@ if [[ ! -f "${TRACKS_CSV}" ]]; then
     # for an A/B comparison run:
     #     TP_M4_FILTER=cv  bash scripts/run_tracker_on_rellis.sh   # M4 baseline
     #     TP_M4_FILTER=imm bash scripts/run_tracker_on_rellis.sh   # P3-M12
+    APPEARANCE_FLAGS=()
+    if [[ "${USE_APPEARANCE}" == "1" ]]; then
+        APPEARANCE_FLAGS=(
+            --use-appearance
+            --features-csv      "${FEAT_CSV}"
+            --appearance-weight "${APPEARANCE_WEIGHT}"
+            --embedding-alpha   "${EMBEDDING_ALPHA}"
+        )
+        echo "[rellis-tracker] appearance ON  λ=${APPEARANCE_WEIGHT}  α=${EMBEDDING_ALPHA}"
+    fi
+    EGO_POSE_FLAGS=()
+    if [[ -n "${EGO_POSES_CSV}" && -f "${EGO_POSES_CSV}" ]]; then
+        EGO_POSE_FLAGS=(--ego-poses "${EGO_POSES_CSV}")
+        echo "[rellis-tracker] Fix B ON  ego-poses=${EGO_POSES_CSV}"
+    elif [[ -n "${EGO_POSES_CSV}" ]]; then
+        echo "[rellis-tracker] WARN ego-poses CSV not found at ${EGO_POSES_CSV} — falling back to Identity (no Fix B)"
+    fi
     "${RUNNER}" \
         --detections     "${DET_CSV}" \
         --solver         munkres \
         --filter         "${TP_M4_FILTER:-imm}" \
         --max-dist       5.0 \
-        --max-misses     10 \
+        --max-misses     "${MAX_MISSES}" \
+        --max-age        "${MAX_AGE}" \
         --min-hits       1 \
         --dt             0.1 \
         --process-noise  2.0 \
         --meas-noise     0.3 \
         --snapshot-every 0 \
         --out            "${TRACK_OUT}" \
-        --verbose
+        --verbose \
+        "${EGO_POSE_FLAGS[@]}" \
+        "${APPEARANCE_FLAGS[@]}"
 else
     echo "[rellis-tracker] reusing cached ${TRACKS_CSV}"
 fi

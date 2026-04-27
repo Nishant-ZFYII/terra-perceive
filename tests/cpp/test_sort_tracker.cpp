@@ -22,6 +22,7 @@
 #include <gtest/gtest.h>
 
 #include <Eigen/Dense>
+#include <Eigen/Geometry>
 #include <algorithm>
 #include <random>
 #include <set>
@@ -317,4 +318,237 @@ TEST(SORTTracker, TwoCrossingTracksIdSwap_WithGreedy) {
     }
     EXPECT_TRUE(any_swap) << "Greedy did not swap ids on the crossing scenario; investigate trajectories and crossing tightness to ensure the test is valid.";
 
+}
+
+// =============================================================================
+// P3.5 cascade matching — tests
+// =============================================================================
+//
+// CascadeRevivesAfterLongOcclusion
+//   max_misses=3, max_age=20. Object visible for 5 frames, then 10
+//   occlusion frames (> max_misses, so the track transitions Live→Lost),
+//   then re-detected at the same spot. With cascade matching enabled,
+//   the SAME track_id should continue (revival via Lost-stage match).
+//
+// CascadeRespectsMaxAgeBudget
+//   Same setup but the gap is > max_age. The Lost track must be erased
+//   before the re-detection arrives, so a NEW track_id is assigned —
+//   this guards against unbounded ghost-track accumulation.
+//
+// Both tests use position-only matching (use_appearance=false). With
+// appearance off, cascade matching falls back to relaxed-position-gate
+// re-association — still correct behavior on a stationary object.
+
+TEST(SORTTrackerCascade, CascadeRevivesAfterLongOcclusion) {
+    // max_misses=3 → Live→Lost transition after 4 missed frames.
+    // max_age=20 → Lost track stays in the retired pool for 20 more frames.
+    SORTTracker tr(/*max_dist=*/3.0f,
+                   /*max_misses=*/3,
+                   /*min_hits=*/1,
+                   Solver::Munkres,
+                   tracker::Order::PredictThenUpdate,
+                   /*dt=*/0.1f,
+                   /*process_noise=*/0.01f,
+                   /*meas_noise=*/0.1f,
+                   tracker::FilterKind::CV,
+                   /*use_appearance=*/false,
+                   /*appearance_weight=*/0.0f,
+                   /*embedding_alpha=*/0.0f,
+                   /*max_age=*/20);
+
+    // 5 frames of detection at (10, 5) → 1 published track with id=0.
+    int original_id = -1;
+    for (int i = 0; i < 5; ++i) {
+        auto pub = step_one_det(tr, 10.0f, 5.0f);
+        ASSERT_EQ(pub.size(), 1u);
+        if (i == 0) original_id = pub[0].id;
+        else EXPECT_EQ(pub[0].id, original_id);
+    }
+
+    // 10 occlusion frames — all empty. After max_misses=3 missed frames,
+    // the track transitions Live→Lost (lost_pos = (10, 5), lost_age = 0).
+    // Subsequent miss frames bump lost_age; cascade keeps the track alive.
+    for (int i = 0; i < 10; ++i) {
+        auto pub = step_no_dets(tr);
+        EXPECT_TRUE(pub.empty()) << "Lost tracks must not be published";
+    }
+
+    // Re-detection at the same spot. Cascade stage 2 should match the
+    // detection to the Lost track and revive it with the original id.
+    auto pub = step_one_det(tr, 10.0f, 5.0f);
+    ASSERT_EQ(pub.size(), 1u) << "exactly one track should publish";
+    EXPECT_EQ(pub[0].id, original_id)
+        << "cascade matching failed to revive the Lost track — "
+        << "got new id=" << pub[0].id << " instead of " << original_id;
+}
+
+TEST(SORTTrackerCascade, CascadeRespectsMaxAgeBudget) {
+    SORTTracker tr(/*max_dist=*/3.0f,
+                   /*max_misses=*/3,
+                   /*min_hits=*/1,
+                   Solver::Munkres,
+                   tracker::Order::PredictThenUpdate,
+                   /*dt=*/0.1f,
+                   /*process_noise=*/0.01f,
+                   /*meas_noise=*/0.1f,
+                   tracker::FilterKind::CV,
+                   /*use_appearance=*/false,
+                   /*appearance_weight=*/0.0f,
+                   /*embedding_alpha=*/0.0f,
+                   /*max_age=*/10);
+
+    // 3 frames of detection → established track at original_id.
+    int original_id = -1;
+    for (int i = 0; i < 3; ++i) {
+        auto pub = step_one_det(tr, 10.0f, 5.0f);
+        ASSERT_EQ(pub.size(), 1u);
+        if (i == 0) original_id = pub[0].id;
+    }
+
+    // Long occlusion: max_misses(3) + max_age(10) + 5 buffer = 18 frames
+    // with no detections. The Lost track should be FINAL-ERASED before
+    // the re-detection arrives.
+    for (int i = 0; i < 18; ++i) {
+        auto pub = step_no_dets(tr);
+        EXPECT_TRUE(pub.empty());
+    }
+
+    // Re-detection at the same spot — but the original track was erased.
+    // A new track must spawn with a different id.
+    auto pub = step_one_det(tr, 10.0f, 5.0f);
+    ASSERT_EQ(pub.size(), 1u);
+    EXPECT_NE(pub[0].id, original_id)
+        << "cascade ignored max_age budget — track resurrected after "
+        << "the retirement window expired";
+}
+
+// -----------------------------------------------------------------------------
+// Fix B regression guard.
+//
+// Setup mirrors the RELLIS bug surfaced in docs/m10-debug-log.md "False
+// revivals — cascade matching's ego-frame bug": a stationary world object
+// gets occluded while the ego translates several meters; once the ego has
+// driven away, a different physical cluster happens to land at the SAME
+// ego-relative coordinate the original track was last seen at, and the
+// pre-Fix-B cascade matched against this stale ego anchor — silently
+// resurrecting the track on a totally different physical thing.
+//
+// Fix B stores the freeze position in world frame and projects it back into
+// current-ego before gating, so the cascade can only revive on the actual
+// physical cluster the track was previously associated with.
+// -----------------------------------------------------------------------------
+TEST(SORTTrackerCascade, CascadeRevivalSurvivesEgoMotion) {
+    SORTTracker tr(/*max_dist=*/3.0f,
+                   /*max_misses=*/3,
+                   /*min_hits=*/1,
+                   Solver::Munkres,
+                   tracker::Order::PredictThenUpdate,
+                   /*dt=*/0.1f,
+                   /*process_noise=*/0.01f,
+                   /*meas_noise=*/0.1f,
+                   tracker::FilterKind::CV,
+                   /*use_appearance=*/false,
+                   /*appearance_weight=*/0.0f,
+                   /*embedding_alpha=*/0.0f,
+                   /*max_age=*/30);
+
+    auto pose_at_world_x = [](float wx) {
+        Eigen::Isometry2f T = Eigen::Isometry2f::Identity();
+        T.translation() = Eigen::Vector2f(wx, 0.0f);
+        return T;
+    };
+
+    // Phase 1 — establish a track for a stationary world tree at world (10, 0).
+    // Ego is at world origin, so the tree appears in current-ego at (10, 0).
+    int original_id = -1;
+    for (int i = 0; i < 5; ++i) {
+        std::vector<Eigen::Vector2f> dets{Eigen::Vector2f(10.0f, 0.0f)};
+        auto pub = tr.update(dets, {0}, pose_at_world_x(0.0f));
+        ASSERT_EQ(pub.size(), 1u);
+        if (i == 0) original_id = pub[0].id;
+    }
+
+    // Phase 2 — 10 frames of occlusion while ego translates +1 m/frame
+    // toward the tree. After miss #4 the track goes Lost. Fix B captures
+    // lost_pos_world = T_world_ego_at_freeze * (10, 0)_ego ≈ (14, 0)_world.
+    // Pre-Fix-B would have stored ego (10, 0) — which a few frames later
+    // means a totally different world location.
+    for (int k = 1; k <= 10; ++k) {
+        const float wx = static_cast<float>(k);
+        auto pub = tr.update({}, {}, pose_at_world_x(wx));
+        EXPECT_TRUE(pub.empty());
+    }
+
+    // Phase 3 — ego is now at world (10, 0), so the same physical tree
+    // (world (10, 0)) appears in CURRENT ego at (0, 0). Add a decoy
+    // cluster (a different physical thing) at world (20, 0) — it appears
+    // at current-ego (10, 0), exactly where the pre-Fix-B stale ego anchor
+    // lived. This is the trap.
+    //
+    //   Fix B path (now): lost_pos_world (14, 0) → current-ego (4, 0).
+    //                     Closest detection is the real tree at (0, 0)
+    //                     (4 m away) → revived ID lands on the right thing.
+    //   Pre-Fix-B path:   lost_pos (10, 0)_ego_stale → matches the decoy
+    //                     at (10, 0) (0 m away) → revival migrates to the
+    //                     wrong physical object.
+    std::vector<Eigen::Vector2f> dets{
+        Eigen::Vector2f(0.0f, 0.0f),    // real tree, current-ego
+        Eigen::Vector2f(10.0f, 0.0f),   // decoy cluster, current-ego
+    };
+    auto pub = tr.update(dets, {0, 0}, pose_at_world_x(10.0f));
+    const Track* revived = find_by_id(pub, original_id);
+    ASSERT_NE(revived, nullptr) << "original track id was not revived";
+    EXPECT_NEAR(revived->position().x(), 0.0f, 1.0f)
+        << "revived track latched onto the decoy at the stale ego anchor — "
+        << "Fix B (world-frame lost_pos) is not transforming back into "
+        << "current ego on cascade match";
+    EXPECT_NEAR(revived->position().y(), 0.0f, 1.0f);
+}
+
+// Pair to the test above: with T_world_ego left at Identity (the legacy
+// path / synthetic-data callers / pre-Fix-B behavior), the same scenario
+// silently revives onto the decoy cluster. This documents the bug Fix B
+// solves and guards against accidentally regressing the world-frame
+// projection back to ego-frame.
+TEST(SORTTrackerCascade, CascadeRevivalWithoutEgoMotionAnchorsToDecoy) {
+    SORTTracker tr(/*max_dist=*/3.0f,
+                   /*max_misses=*/3,
+                   /*min_hits=*/1,
+                   Solver::Munkres,
+                   tracker::Order::PredictThenUpdate,
+                   /*dt=*/0.1f,
+                   /*process_noise=*/0.01f,
+                   /*meas_noise=*/0.1f,
+                   tracker::FilterKind::CV,
+                   /*use_appearance=*/false,
+                   /*appearance_weight=*/0.0f,
+                   /*embedding_alpha=*/0.0f,
+                   /*max_age=*/30);
+
+    // Same establishment phase as the Fix B test, but with NO ego pose
+    // passed (Identity throughout).
+    int original_id = -1;
+    for (int i = 0; i < 5; ++i) {
+        auto pub = step_one_det(tr, 10.0f, 0.0f);
+        ASSERT_EQ(pub.size(), 1u);
+        if (i == 0) original_id = pub[0].id;
+    }
+    for (int k = 0; k < 10; ++k) {
+        auto pub = step_no_dets(tr);
+        EXPECT_TRUE(pub.empty());
+    }
+    // Decoy at the stale ego anchor (10, 0) plus a tree at (0, 0).
+    auto pub = tr.update({Eigen::Vector2f(0.0f, 0.0f),
+                          Eigen::Vector2f(10.0f, 0.0f)},
+                         {0, 0});
+    const Track* revived = find_by_id(pub, original_id);
+    ASSERT_NE(revived, nullptr);
+    // Without ego-motion compensation the cascade revives onto the decoy
+    // — exactly the bug Fix B targets. Asserting this nails the failure
+    // mode in place so the next refactor can't quietly hide it.
+    EXPECT_NEAR(revived->position().x(), 10.0f, 1.0f)
+        << "without Fix B the cascade should anchor to the stale ego "
+        << "coordinate; if this assertion is now failing, the cascade "
+        << "behavior has changed and the Fix B test above no longer "
+        << "exercises a meaningful difference";
 }

@@ -42,6 +42,9 @@
 #include "hungarian.hpp"   // tracker::Solver
 
 #include <Eigen/Core>
+#include <Eigen/Geometry>
+
+#include <cmath>
 
 #include <chrono>
 #include <cstdint>
@@ -141,12 +144,17 @@ static std::vector<DetRow> load_detections(const fs::path& csv_path) {
 // -----------------------------------------------------------------------------
 // Group detections by frame_id. Assumes the CSV is sorted by frame_id; if not,
 // you'll need to bucket into a std::map first.
+//
+// P3-M13: when --features-csv is provided, `features[i]` carries the 8-dim
+// hand-crafted feature vector for detection i (parallel to positions[i]).
+// When --use-appearance is off, this vector is empty.
 // -----------------------------------------------------------------------------
 struct FrameDetections {
     int frame_id;
-    std::vector<Eigen::Vector2f> positions;
-    std::vector<int>             class_ids;
-    std::vector<int>             gt_track_ids;
+    std::vector<Eigen::Vector2f>      positions;
+    std::vector<int>                  class_ids;
+    std::vector<int>                  gt_track_ids;
+    std::vector<tracker::FeatureVector> features;
 };
 
 static std::vector<FrameDetections> group_by_frame(const std::vector<DetRow>& rows) {
@@ -194,6 +202,80 @@ static tracker::FilterKind parse_filter(const std::string& s) {
     if (s == "cv"  || s == "CV")   return tracker::FilterKind::CV;
     if (s == "imm" || s == "IMM")  return tracker::FilterKind::IMM;
     throw std::runtime_error("Unknown filter: " + s + " (expected cv|imm)");
+}
+
+// -----------------------------------------------------------------------------
+// P3-M13 feature loader — read the parallel features CSV produced by
+// scripts/clusters_to_detections.py --features-dir.  Schema:
+//     frame_id, det_id, n_log, bbox_x, bbox_y, bbox_z, min_z, eig_r1,
+//     eig_r2, range
+//
+// Returns a map (frame_id, det_id) → FeatureVector. The runner then merges
+// this into FrameDetections.features in matching order.
+// -----------------------------------------------------------------------------
+static std::map<std::pair<int, int>, tracker::FeatureVector>
+load_features(const fs::path& csv_path) {
+    std::ifstream in(csv_path);
+    if (!in) throw std::runtime_error("cannot open features CSV: " + csv_path.string());
+    std::string header;
+    std::getline(in, header);          // discard
+    std::map<std::pair<int, int>, tracker::FeatureVector> out;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty()) continue;
+        std::stringstream ss(line);
+        int fid, did;
+        char comma;
+        tracker::FeatureVector feat;
+        ss >> fid >> comma >> did;
+        for (int i = 0; i < 8; ++i) {
+            ss >> comma >> feat(i);
+        }
+        out.emplace(std::make_pair(fid, did), feat);
+    }
+    return out;
+}
+
+// -----------------------------------------------------------------------------
+// Fix B — load SLAM ego poses keyed by frame_id.
+//
+// Schema (P2-M2 product, data/poses_slam_full.csv):
+//     frame_id, tx, ty, tz, qx, qy, qz, qw
+//
+// The tracker is BEV-only, so we project SE(3) → SE(2) by extracting yaw
+// from the quaternion and dropping z + roll/pitch. This is the same
+// projection the rest of the BEV pipeline uses (see slam_runner.cpp).
+//
+// Returns map<frame_id, T_world_ego_2d>. Frames missing from the CSV are
+// absent from the map; the per-frame loop falls back to Identity (which
+// makes Fix B a no-op for that frame, equivalent to ego-frame behavior).
+// -----------------------------------------------------------------------------
+static std::map<int, Eigen::Isometry2f> load_ego_poses(const fs::path& csv_path) {
+    std::ifstream in(csv_path);
+    if (!in) throw std::runtime_error("cannot open ego-poses CSV: " + csv_path.string());
+    std::string header;
+    std::getline(in, header);          // discard
+    std::map<int, Eigen::Isometry2f> out;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty()) continue;
+        std::stringstream ss(line);
+        int fid;
+        float tx, ty, tz, qx, qy, qz, qw;
+        char comma;
+        ss >> fid    >> comma
+           >> tx     >> comma >> ty >> comma >> tz >> comma
+           >> qx     >> comma >> qy >> comma >> qz >> comma >> qw;
+        // Yaw from quaternion (Z-axis rotation):
+        //   yaw = atan2(2(qw·qz + qx·qy), 1 - 2(qy² + qz²))
+        const float yaw = std::atan2(2.0f * (qw * qz + qx * qy),
+                                     1.0f - 2.0f * (qy * qy + qz * qz));
+        Eigen::Isometry2f T = Eigen::Isometry2f::Identity();
+        T.linear()      = Eigen::Rotation2Df(yaw).toRotationMatrix();
+        T.translation() = Eigen::Vector2f(tx, ty);
+        out.emplace(fid, T);
+    }
+    return out;
 }
 
 // -----------------------------------------------------------------------------
@@ -332,6 +414,29 @@ int main(int argc, char** argv) {
     const bool  verbose              = hasFlag(argc, argv, "--verbose");
     const bool swap_order            = hasFlag(argc, argv, "--swap-order"); // ablation: UpdateThenPredict instead of PredictThenUpdate
 
+    // P3-M13 appearance flags.
+    //   --use-appearance              : enable the appearance-augmented cost matrix.
+    //   --features-csv FILE           : per-detection 8-dim features
+    //                                   (sibling to --detections; produced by
+    //                                   scripts/clusters_to_detections.py
+    //                                   --features-dir).
+    //   --appearance-weight λ          : convex weight in (1-λ)·d_pos + λ·d_emb.
+    //   --embedding-alpha α            : running-mean rate for track embeddings.
+    const bool        use_appearance     = hasFlag(argc, argv, "--use-appearance");
+    const std::string features_csv       = getArg(argc, argv, "--features-csv", "");
+    const float       appearance_weight  = std::stof(getArg(argc, argv, "--appearance-weight", "0.4"));
+    const float       embedding_alpha    = std::stof(getArg(argc, argv, "--embedding-alpha",   "0.1"));
+    // P3.5 cascade matching:
+    //   --max-age N  : Lost tracks stay in the retired pool for N frames.
+    //                  Default 0 (cascade DISABLED, P3-M13 behavior).
+    const int         max_age            = std::stoi(getArg(argc, argv, "--max-age", "0"));
+    // Fix B: optional SLAM ego-pose CSV. When provided, the tracker stores
+    // Lost-track positions in world frame and the cascade stage transforms
+    // them back into current-ego before gating. Without it (default empty),
+    // every per-frame T_world_ego stays at Identity and behavior is
+    // bit-identical to the pre-Fix-B path.
+    const std::string ego_poses_csv      = getArg(argc, argv, "--ego-poses", "");
+
     if (detections_csv.empty()) {
         std::cerr << "ERROR: --detections is required\n";
         return 1;
@@ -345,18 +450,29 @@ int main(int argc, char** argv) {
 
     if (verbose) {
         std::cerr << "[tracker_runner] config:\n"
-                  << "  detections      = " << detections_csv << "\n"
-                  << "  solver          = " << solver_str     << "\n"
-                  << "  filter          = " << filter_str     << "\n"
-                  << "  max_dist        = " << max_dist       << "\n"
-                  << "  max_misses      = " << max_misses     << "\n"
-                  << "  min_hits        = " << min_hits       << "\n"
-                  << "  dt              = " << dt             << "\n"
-                  << "  process_noise   = " << process_noise  << "\n"
-                  << "  meas_noise      = " << meas_noise     << "\n"
-                  << "  snapshot_every  = " << snapshot_every << "\n"
-                  << "  out             = " << out_dir        << "\n"
-                  << "  swap_order      = " << (swap_order ? "UpdateThenPredict" : "PredictThenUpdate") << "\n";
+                  << "  detections        = " << detections_csv     << "\n"
+                  << "  solver            = " << solver_str         << "\n"
+                  << "  filter            = " << filter_str         << "\n"
+                  << "  max_dist          = " << max_dist           << "\n"
+                  << "  max_misses        = " << max_misses         << "\n"
+                  << "  min_hits          = " << min_hits           << "\n"
+                  << "  dt                = " << dt                 << "\n"
+                  << "  process_noise     = " << process_noise      << "\n"
+                  << "  meas_noise        = " << meas_noise         << "\n"
+                  << "  use_appearance    = " << (use_appearance ? "true" : "false") << "\n"
+                  << "  features_csv      = " << features_csv       << "\n"
+                  << "  appearance_weight = " << appearance_weight  << "\n"
+                  << "  embedding_alpha   = " << embedding_alpha    << "\n"
+                  << "  max_age (cascade) = " << max_age            << "\n"
+                  << "  ego_poses (Fix B) = " << (ego_poses_csv.empty() ? "(none, Identity)" : ego_poses_csv) << "\n"
+                  << "  snapshot_every    = " << snapshot_every     << "\n"
+                  << "  out               = " << out_dir            << "\n"
+                  << "  swap_order        = " << (swap_order ? "UpdateThenPredict" : "PredictThenUpdate") << "\n";
+    }
+
+    if (use_appearance && features_csv.empty()) {
+        std::cerr << "ERROR: --use-appearance requires --features-csv\n";
+        return 1;
     }
 
     // ---- Load detections ------------------------------------------------
@@ -370,13 +486,50 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // ---- Load + merge features (P3-M13) ---------------------------------
+    if (use_appearance) {
+        auto feat_map = load_features(features_csv);
+        size_t n_filled = 0, n_zeros = 0;
+        for (auto& f : frames) {
+            f.features.reserve(f.positions.size());
+            for (size_t k = 0; k < f.positions.size(); ++k) {
+                auto it = feat_map.find({f.frame_id, static_cast<int>(k)});
+                if (it != feat_map.end()) {
+                    f.features.push_back(it->second);
+                    ++n_filled;
+                } else {
+                    f.features.push_back(tracker::FeatureVector::Zero());
+                    ++n_zeros;
+                }
+            }
+        }
+        if (verbose) {
+            std::cerr << "[tracker_runner] features: " << n_filled
+                      << " matched, " << n_zeros << " zero-filled\n";
+        }
+    }
+
+    // ---- Load ego poses (Fix B, optional) -------------------------------
+    std::map<int, Eigen::Isometry2f> ego_poses;
+    if (!ego_poses_csv.empty()) {
+        ego_poses = load_ego_poses(ego_poses_csv);
+        if (verbose) {
+            std::cerr << "[tracker_runner] ego poses loaded: "
+                      << ego_poses.size() << " frames\n";
+        }
+    }
+
     // ---- Build the tracker ----------------------------------------------
     tracker::SORTTracker tr(max_dist, max_misses, min_hits,
                             solver,
                             swap_order ? tracker::Order::UpdateThenPredict
                                        : tracker::Order::PredictThenUpdate,
                             dt, process_noise, meas_noise,
-                            filter_kind);
+                            filter_kind,
+                            use_appearance,
+                            appearance_weight,
+                            embedding_alpha,
+                            max_age);
 
     // ---- Open output streams --------------------------------------------
     std::ofstream tracks_csv(fs::path(out_dir) / "tracks.csv");
@@ -497,9 +650,36 @@ int main(int argc, char** argv) {
                                                                                                                                                                                                     
         // Empty defaults — used when this fid has no detection rows.                                                                                                                             
         static const FrameDetections kEmpty{};                                                                                                                                                    
-        const FrameDetections& f = (it != by_fid.end()) ? *it->second : kEmpty;                                                                                                                   
-                                                                                                                                                                                                    
-        const auto published = tr.update(f.positions, f.class_ids);                                                                                                                               
+        const FrameDetections& f = (it != by_fid.end()) ? *it->second : kEmpty;
+
+        // Fix B: per-frame world←ego transform. Identity if --ego-poses
+        // wasn't provided OR this fid is missing from the pose CSV (Lost
+        // tracks fall back to ego-frame anchoring for that frame, no worse
+        // than pre-Fix-B behavior).
+        Eigen::Isometry2f T_world_ego = Eigen::Isometry2f::Identity();
+        if (!ego_poses.empty()) {
+            auto pit = ego_poses.find(fid);
+            if (pit != ego_poses.end()) T_world_ego = pit->second;
+        }
+
+        std::vector<tracker::Track> published;
+        if (use_appearance) {
+            // P3-M13 path: build Detection vector with positions + features.
+            std::vector<tracker::Detection> dets;
+            dets.reserve(f.positions.size());
+            for (size_t k = 0; k < f.positions.size(); ++k) {
+                tracker::Detection d;
+                d.position = f.positions[k];
+                d.features = (k < f.features.size())
+                                 ? f.features[k]
+                                 : tracker::FeatureVector::Zero();
+                dets.push_back(std::move(d));
+            }
+            published = tr.update_with_features(dets, f.class_ids, T_world_ego);
+        } else {
+            // M4 / M12 path — pure-position cost matrix.
+            published = tr.update(f.positions, f.class_ids, T_world_ego);
+        }                                                                                                                               
                                                                                                                                                                                                     
         // Per-track CSV rows                                                                                                                                                                     
         for (const auto& t : published) {                     

@@ -62,14 +62,14 @@ target_link_libraries(hungarian Eigen3::Eigen)
 add_library(dbscan src/dbscan.cpp)
 target_link_libraries(dbscan Eigen3::Eigen)
 
-add_library(sort_tracker src/sort_tracker.cpp)
-target_link_libraries(sort_tracker kalman_filter imm_filter hungarian Eigen3::Eigen)
-
-# Phase-3 M13: Deep SORT-style appearance encoder. Standalone library — does
-# NOT yet link into sort_tracker. Wiring happens in M13 week 3 (Mon 05-11)
-# after training completes and weights have been validated.
+# Phase-3 M13: Deep SORT-style appearance encoder. Built BEFORE sort_tracker
+# now that sort_tracker.cpp pulls it in (M13 cost-matrix integration).
 add_library(appearance_encoder src/appearance_encoder.cpp)
 target_link_libraries(appearance_encoder Eigen3::Eigen)
+
+add_library(sort_tracker src/sort_tracker.cpp)
+target_link_libraries(sort_tracker kalman_filter imm_filter hungarian
+                                   appearance_encoder Eigen3::Eigen)
 
 # --- Phase 2-M2: SLAM libraries (from scratch) ---
 
