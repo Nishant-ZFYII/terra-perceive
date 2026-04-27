@@ -58,6 +58,15 @@ data/
 weights/
 checkpoints/
 
+# === M4 run outputs (keep dir structure, ignore heavy artifacts) ===
+results_m4/**/*.mp4
+results_m4/**/*.gif
+results_m4/**/*.png
+results_m4/**/*.jpg
+results_m4/**/*.csv
+results_m4/**/*.log
+# small summary JSONs (metrics.json, id_switches.json) ARE committed
+
 # === Third-party reference repos ===
 third_party/
 
@@ -84,3 +93,4 @@ logs/
 *.key
 *.pem
 condaenv.*.requirements.txt
+.claude/
