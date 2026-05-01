@@ -1,0 +1,14 @@
+{
+  "frames": 2847,
+  "total_track_rows": 44645,
+  "distinct_track_ids": 307,
+  "id_switches": 0,
+  "runtime_ms": 4715.43,
+  "solver": "munkres",
+  "max_dist": 5,
+  "max_misses": 10,
+  "min_hits": 3,
+  "dt": 0.1,
+  "process_noise": 2,
+  "meas_noise": 0.3
+}

@@ -72,6 +72,63 @@ source /scratch/np3129/conda_envs/terra_perceive_m4/etc/profile.d/conda.sh
 conda activate /scratch/np3129/conda_envs/terra_perceive_m4
 ```
 
+### ⚠️ Quota-safe install — DO THIS FIRST on a fresh login
+
+Conda's package cache defaults to `$HOME/.conda/pkgs`. NYU `$HOME` quota is 0.05 TB / 30k inodes — installing anything mid-sized (matplotlib + opencv + ffmpeg) blows the inode quota with `[Errno 122] Disk quota exceeded`. Hit twice (2026-04-26 and 2026-04-27); both times had to clean and redirect.
+
+**Permanent fix — run once per login session, idempotent:**
+
+```bash
+# Redirect conda + pip caches to scratch (where there's 5 TB)
+cat > ~/.condarc <<'EOF'
+pkgs_dirs:
+  - /scratch/np3129/conda_pkgs
+  - /home/np3129/.conda/pkgs
+envs_dirs:
+  - /scratch/np3129/conda_envs
+  - /home/np3129/.conda/envs
+EOF
+
+mkdir -p /scratch/np3129/conda_pkgs /scratch/np3129/pip_cache
+
+export CONDA_PKGS_DIRS=/scratch/np3129/conda_pkgs
+export PIP_CACHE_DIR=/scratch/np3129/pip_cache
+
+# Persist across sessions
+grep -q CONDA_PKGS_DIRS ~/.bashrc || echo 'export CONDA_PKGS_DIRS=/scratch/np3129/conda_pkgs' >> ~/.bashrc
+grep -q PIP_CACHE_DIR  ~/.bashrc || echo 'export PIP_CACHE_DIR=/scratch/np3129/pip_cache'   >> ~/.bashrc
+```
+
+**Recovery if you've already hit the quota error:**
+
+```bash
+conda clean -a -y
+rm -rf ~/.conda/pkgs/*
+rm -rf ~/.cache/pip/*
+myquota   # confirm $HOME is back under 80% inodes
+```
+
+**Verify the redirect is active before installing:**
+
+```bash
+conda config --show pkgs_dirs    # first entry must be /scratch/...
+echo $CONDA_PKGS_DIRS            # must be /scratch/np3129/conda_pkgs
+```
+
+### Common env recipes
+
+Slim training/animation env (matplotlib + cv2 + ffmpeg + numpy/pandas — no ROS2):
+
+```bash
+mamba create -p /scratch/np3129/conda_envs/<env-name> \
+    -c conda-forge -y \
+    python=3.11 numpy matplotlib opencv ffmpeg pillow pyyaml pandas
+```
+
+This is what `terra_perceive_m13` was rebuilt as on 2026-04-27 to handle the Phase-4 animation render. ~3 min install.
+
+For the C++ tracker_runner build (needs ROS2 / colcon), use the heavier `setup_hpc_p2m4.sh` flow which provisions the ROS2 humble env separately.
+
 ## Slurm
 
 ```bash
