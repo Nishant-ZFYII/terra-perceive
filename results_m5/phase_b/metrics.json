@@ -1,0 +1,28 @@
+{
+  "frame_window": [
+    83,
+    241
+  ],
+  "n_frames_processed": 158,
+  "n_frames_with_track": 157,
+  "distinct_track_ids": 1,
+  "track_lifetimes": {
+    "0": 157
+  },
+  "longest_lifetime": 157,
+  "mean_lifetime": 157.0,
+  "n_safety_events": 0,
+  "wall_seconds": 59.12144494056702,
+  "fps": 2.672465129342366,
+  "config": {
+    "max_dist": 5.0,
+    "max_misses": 10,
+    "min_hits": 1,
+    "dt": 0.1,
+    "process_noise": 2.0,
+    "meas_noise": 0.3,
+    "trav_score": 0.5,
+    "lateral_arc_m": 5.0
+  },
+  "tracker_stderr_tail": ""
+}

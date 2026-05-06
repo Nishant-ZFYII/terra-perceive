@@ -14,12 +14,16 @@ find_package(visualization_msgs REQUIRED)
 find_package(nav2_costmap_2d REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(Protobuf REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 include_directories(
     include
     third_party/stb
     third_party/tinycolormap
     ${EIGEN3_INCLUDE_DIRS}
+    ${Protobuf_INCLUDE_DIRS}
+    transport/proto    # generated *.pb.h live here
 )
 
 # --- Phase 1: Core perception libraries (from scratch, Eigen only) ---
@@ -118,6 +122,24 @@ target_link_libraries(obstacle_extractor
 add_executable(dbscan_cli src/dbscan_cli.cpp)
 target_link_libraries(dbscan_cli dbscan Eigen3::Eigen)
 
+# --- P2-M5.A2 tracker_node CLI binary (NATS-bridged, NOT a ROS2 node) ---
+# Reads length-prefixed terra_perceive.DetectionList protobuf frames from stdin,
+# writes length-prefixed TrackList frames to stdout. Python sidecar
+# transport/tracker_bridge.py glues both ends to NATS.
+# ROS2 wrapping is deferred to M10 per V6 master plan.
+add_library(perception_proto
+    transport/proto/perception.pb.cc
+    transport/proto/safety.pb.cc
+    transport/proto/telemetry.pb.cc)
+target_link_libraries(perception_proto ${Protobuf_LIBRARIES})
+target_include_directories(perception_proto PUBLIC transport/proto)
+
+add_executable(tracker_node ros2_nodes/tracker_node.cpp)
+target_link_libraries(tracker_node
+    sort_tracker cam_lidar_projection
+    perception_proto
+    ${Protobuf_LIBRARIES} yaml-cpp Eigen3::Eigen)
+
 add_library(g2o_wrapper src/g2o_wrapper.cpp)
 target_link_libraries(g2o_wrapper pose_graph_slam Eigen3::Eigen
     g2o_core g2o_types_slam3d g2o_solver_eigen g2o_stuff fmt)
@@ -138,9 +160,9 @@ if(BUILD_ROS2_NODES)
     ament_target_dependencies(projection_node rclcpp sensor_msgs)
     target_link_libraries(projection_node cam_lidar_projection)
 
-    add_executable(tracker_node ros2_nodes/tracker_node.cpp)
-    ament_target_dependencies(tracker_node rclcpp visualization_msgs geometry_msgs)
-    target_link_libraries(tracker_node sort_tracker)
+    # tracker_node has been promoted out of BUILD_ROS2_NODES and rebuilt as
+    # a stand-alone CLI binary for P2-M5.A2 (NATS-bridged via Python sidecar).
+    # The ROS2 wrapper for the tracker is M10 territory.
 
     add_executable(safety_node ros2_nodes/safety_node.cpp)
     ament_target_dependencies(safety_node rclcpp geometry_msgs visualization_msgs nav_msgs)

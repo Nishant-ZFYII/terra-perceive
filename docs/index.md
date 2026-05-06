@@ -41,9 +41,9 @@ Phase 1 handles single frames. Phase 2 adds the temporal dimension — where is 
 
 | Milestone | Implementation | Status |
 |-----------|----------------|--------|
-| M9: Accumulated BEV Map | World map from multi-source odometry, NATS transport | Planned |
-| M10: SORT Tracker | Kalman filter + Hungarian assignment (C++/Eigen, from scratch) | Planned |
-| M11: Tracker-Safety Loop | YOLO + tracked object TTC, NATS wiring | Planned |
+| M9: Accumulated BEV Map | World map from multi-source odometry, NATS transport | Completed |
+| M10: SORT Tracker | Kalman filter + Hungarian assignment (C++/Eigen, from scratch) | Completed |
+| [M11: Tracker-Safety Loop](m5-pipeline) | YOLO + cam-LiDAR projection + SORT + safety supervisor + NATS + JetStream audit trail | Completed |
 
 ### Evaluation & Generalization
 
