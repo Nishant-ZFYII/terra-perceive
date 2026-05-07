@@ -117,3 +117,14 @@ plan_*.md
 __pycache__/
 .pytest_cache/
 docs/assets/m3/nats_demo_terminal.mp4
+
+# === merged from p2m4 branch ===
+.claude/
+# === M4 run outputs (keep dir structure, ignore heavy artifacts) ===
+results_m4/**/*.csv
+results_m4/**/*.gif
+results_m4/**/*.jpg
+results_m4/**/*.log
+results_m4/**/*.mp4
+results_m4/**/*.png
+# small summary JSONs (metrics.json, id_switches.json) ARE committed

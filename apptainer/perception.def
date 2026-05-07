@@ -1,0 +1,65 @@
+Bootstrap: docker
+From: ros:humble-ros-base-jammy
+
+# =============================================================================
+# perception.def — Apptainer container for Terra Perceive on NYU HPC.
+# =============================================================================
+# Bundles everything needed to BUILD and RUN the M4 pipeline:
+#   - Ubuntu 22.04 + ROS Humble (for ament_cmake at build time)
+#   - C++ toolchain (g++, cmake, make)
+#   - Eigen 3, gtest, fmt
+#   - Python 3 with: rosbags, numpy, matplotlib, scipy
+#
+# Build on HPC (login node has apptainer):
+#   apptainer build /scratch/$USER/p2m4.sif apptainer/perception.def
+#
+# Build time: ~10-15 minutes on Greene/Torch login node.
+#
+# Smoke test:
+#   apptainer exec /scratch/$USER/p2m4.sif python3 -c "import rosbags, numpy, matplotlib"
+#   apptainer exec /scratch/$USER/p2m4.sif which colcon
+# =============================================================================
+
+%post
+    set -eux
+
+    # --- System deps ------------------------------------------------------
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        build-essential cmake git pkg-config \
+        python3 python3-pip python3-numpy python3-matplotlib python3-scipy \
+        libeigen3-dev libfmt-dev libgtest-dev \
+        ffmpeg \
+        ros-humble-ament-cmake \
+        ros-humble-ament-cmake-gtest \
+        ros-humble-ament-cmake-core
+
+    # --- Python deps (rosbags reads .bag files without a ROS install) ---
+    pip3 install --no-cache-dir \
+        rosbags \
+        Pillow
+
+    # --- tinycolormap and stb (header-only, vendored at /opt) ---
+    mkdir -p /opt/third_party
+    cd /opt/third_party
+    git clone --depth 1 https://github.com/yuki-koyama/tinycolormap.git
+    git clone --depth 1 https://github.com/nothings/stb.git
+
+    # --- Cleanup ---
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+
+%environment
+    # Auto-source ROS so colcon works without a separate `source /opt/...` call.
+    export TINYCOLORMAP_DIR=/opt/third_party/tinycolormap
+    export STB_DIR=/opt/third_party/stb
+
+%runscript
+    # Default action: source ROS then forward to whatever command was given.
+    source /opt/ros/humble/setup.bash
+    exec "$@"
+
+%labels
+    Author np3129@nyu.edu
+    Project terra-perceive-p2m4
+    Date 2026-04-25

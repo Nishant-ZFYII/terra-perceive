@@ -1,0 +1,14 @@
+{
+  "frames": 22,
+  "total_track_rows": 22,
+  "distinct_track_ids": 2,
+  "id_switches": 1,
+  "runtime_ms": 3.8688,
+  "solver": "greedy",
+  "max_dist": 3,
+  "max_misses": 1,
+  "min_hits": 1,
+  "dt": 0.1,
+  "process_noise": 0.01,
+  "meas_noise": 0.1
+}
