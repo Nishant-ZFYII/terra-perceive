@@ -116,3 +116,4 @@ plan_*.md
 *.pyc
 __pycache__/
 .pytest_cache/
+docs/assets/m3/nats_demo_terminal.mp4
