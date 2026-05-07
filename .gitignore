@@ -128,3 +128,9 @@ results_m4/**/*.log
 results_m4/**/*.mp4
 results_m4/**/*.png
 # small summary JSONs (metrics.json, id_switches.json) ARE committed
+results_m5/phase_b/clips/*.mp4
+results_m5/phase_b/clips/*.gif 
+# === draft / scratch markdown that doesn't ship === 
+docs/*_v1_draft.md 
+docs/*-debug-log.md
+docs/todo-*.md 
