@@ -41,9 +41,9 @@ Phase 1 handles single frames. Phase 2 adds the temporal dimension — where is 
 
 | Milestone | Implementation | Status |
 |-----------|----------------|--------|
-| M9: Accumulated BEV Map | World map from multi-source odometry, NATS transport | Planned |
+| [M9: Accumulated BEV Map](m9-bev-map) | World map from multi-source odometry, NATS transport | Completed |
 | [M10: SORT Tracker](m10-sort-tracker) | Kalman + Hungarian + DBSCAN from scratch; IMM + Deep SORT cascade + Mahalanobis gate; Phase-4 K-frame DBSCAN sweep mapping the structural ceiling | Completed |
-| M11: Tracker-Safety Loop | YOLO + tracked object TTC, NATS wiring | Planned |
+| [M11: Tracker-Safety Loop](m5-pipeline) | YOLO + cam-LiDAR projection + SORT + safety supervisor + NATS + JetStream audit trail | Completed |
 
 ### Evaluation & Generalization
 
