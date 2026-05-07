@@ -84,3 +84,35 @@ logs/
 *.key
 *.pem
 condaenv.*.requirements.txt
+
+# === backup files (no-silent-deletes convention) ===
+*.prev_v*
+
+# === intermediate / generated artifacts ===
+output/
+.mplconfig/
+transport/proto/*_pb2.py
+transport/proto/*_pb2.pyi
+
+# === ablation outputs (large; reproducible by re-running) ===
+results/2026-*
+results/m3/
+results/p2m2/
+results/latest
+results/camera_feed.mp4
+results/slam_splitview.mp4
+results/factor_graph_architecture.png
+results/optimization_effect.png
+results/frame0_*.png
+results/synthetic_*.png
+
+# === planning artifacts (mentor notes, not source) ===
+plan_p2m5
+plan_p2m6
+plan_*.md
+*_plan.md
+
+# === Python cache / runtime ===
+*.pyc
+__pycache__/
+.pytest_cache/
