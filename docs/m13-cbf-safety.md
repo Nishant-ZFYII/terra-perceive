@@ -208,13 +208,15 @@ The reduction in false positives is the third reason the CBF policy is operation
 
 ## On real RELLIS data
 
-The scripted scenarios drive the quantitative claims. A qualitative confirmation on real LiDAR sits next to them. I replayed the M4 tracker output (from the [tracker post](m10-sort-tracker)) through both safety modes in a side-by-side render. RELLIS sequence 00 has one person walking in front of the vehicle for parts of the drive; the other workers are behind, outside the forward arc, so they do not affect the supervisor.
+The scripted scenarios drive the quantitative claims. A qualitative confirmation on real LiDAR sits next to them. I replayed the DBSCAN cluster output from the [tracker post](m10-sort-tracker) through both safety modes in a side-by-side render of the full 2849-frame RELLIS sequence 00. The adapter picks the nearest cluster centroid in the forward arc per frame, treats it as the worker, and feeds the resulting (x, y, vx, vy) trace into both supervisors.
 
-> The RELLIS render is deferred to a follow-up session. The adapter that turns M4 tracker output into the safety supervisor's expected per-frame inputs (track IDs at 10 Hz) is not yet in the repo, and the qualitative claim it would back up is already covered by the scripted GIFs above. Adding the adapter is a small piece of glue that I will revisit alongside the m11 tracker-safety integration.
+![RELLIS sequence 00 hero, all 2849 frames. Top panel: kinematic (blue) and CBF (red) v(t) traces over the full 95-second drive. Bottom panel: BEV scene with raw LiDAR (gray), tracked worker (cyan dot with trail), ego (black square), and the forward arc cone. Kinematic engages briefly within the first second on a closing cluster centroid, drops the commanded velocity, and never re-accelerates because the simple closed-loop sim has no upstream cruise-recovery logic. CBF stays at full cruise the entire run because the closest cluster never gets within the h(x) boundary.](assets/m13/rellis_hero.gif)
 
-Two patterns the qualitative replay surfaces, both relevant to the comparison even without the render. The cluster centroid for the front-walking person jitters by 5 to 15 cm per frame at constant pace, which is the centroid-jitter problem covered in detail in the [tracker post](m10-sort-tracker). That jitter feeds into the supervisor's `v_relative` estimate. Kinematic's bang-bang decisions amplify the jitter into visible v(t) chatter; CBF's smoothness damps it.
+The visual contrast is stark, and it overstates the case slightly. Kinematic engaged on 5 of 2849 frames against the cluster-nearest-in-arc proxy; the v(t) line dropping to 0.76 and staying there is a closed-loop-simulator artifact, not a property of the real kinematic policy on a real vehicle. With a proper outer-loop controller that re-issues a 2 m/s cruise command whenever it is safe to do so, kinematic v would oscillate around the engagement boundary instead of latching low. The relevant comparison is in the engagement frequency, not the steady-state value.
 
-For the eventual render, `v_relative` is pre-smoothed with a 5-frame moving average so the qualitative comparison reads cleanly. The headline metrics in the scripted-scenario table do *not* use this smoothing. They come straight from per-frame supervisor output.
+The honest reading: across the 2849-frame drive, **kinematic engaged on five frames where CBF correctly did not**. Every one of those engagements is a false positive of the same shape as the `far_pass` and `edge_of_arc` synthetic scenarios above. The clusters that the DBSCAN proxy picks as "nearest worker" never get close enough to trigger CBF (the minimum cluster distance over the full drive is 6.85 m, and CBF's h(x) boundary at v=2 is at d ≈ 3.2 m). The synthetic-scenario bang-bang stories don't replay here because the real LiDAR scene doesn't put a worker that close to the front of the vehicle.
+
+The DBSCAN cluster proxy is also not the same as a real tracker. The cluster centroid is the closest cluster in arc per frame, with a continuity heuristic that anchors to the previous frame's worker if a candidate is within 2 m. Where no candidate is within that 2 m gate, the worker is taken as "off-stage." A real tracker (the M4 SORT pipeline from the [tracker post](m10-sort-tracker)) would carry a single worker identity through occlusions and across cluster splits; the proxy here will switch which physical cluster it follows when the front-walking person is occluded by closer trees. The replay is qualitative, not a tracker benchmark.
 
 ---
 
@@ -232,11 +234,11 @@ The deferred items are mostly extensions into well-trodden subliteratures with m
 
 ---
 
-## What this scenario design got wrong
+## Two things the scenario design missed
 
-The scripted scenarios were sized against the kinematic policy's TTC thresholds, not against the regime boundaries CBF itself defines. Two of the six (`occluded` and `multi_worker`) crossed the kinematic thresholds and produced the bang-bang story. The other four did not, and on those four the kinematic and CBF v(t) traces are nearly indistinguishable. Two more scenarios designed against CBF's own behaviors (rapid `v_relative` changes, multiple simultaneously binding constraints) would have made the smoothness comparison more discriminating from the start.
+The scripted scenarios were sized against the kinematic policy's TTC thresholds, not against the regime boundaries CBF itself defines. Two of the six (`occluded` and `multi_worker`) crossed the kinematic thresholds and produced the bang-bang story. The other four did not, and on those four the kinematic and CBF v(t) traces are nearly indistinguishable. Two more scenarios designed against CBF's own behaviors (rapid `v_relative` changes, multiple simultaneously binding constraints) would have made the smoothness comparison more discriminating.
 
-The v(t) plots also conflate two things. Both policies output a scale factor on the commanded velocity, not a velocity command. The runner integrates the scale into a velocity over time, and that integration smooths discrete decisions: scale 0.97 applied many times reads as a smooth deceleration even though each individual decision is a step in the threshold tree. A more honest comparison would render the per-frame scale-factor decisions alongside the integrated v(t). The conclusion does not move, but the framing would be cleaner.
+The v(t) plots also conflate two things. Both policies output a scale factor on the commanded velocity, not a velocity command. The runner integrates the scale into a velocity over time, and that integration smooths discrete decisions: scale 0.97 applied many times reads as a smooth deceleration even though each individual decision is a step in the threshold tree. Rendering the per-frame scale-factor decisions alongside the integrated v(t) would have been cleaner. The conclusion does not move.
 
 ---
 

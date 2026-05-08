@@ -24,7 +24,7 @@ The plan I wrote at the start of this milestone predicted that the new formula w
 
 ## What this builds, and what was already there
 
-The traversability grid that ships in [the Phase-1 milestone](m3-traversability) consumes a per-frame LiDAR point cloud, segments out the ground via [sector-based RANSAC](m2-ransac), bins the obstacle points into a 0.5 m grid, and writes a `risk` (in [0, 1]) and a `confidence` (in [0, 1]) for each cell. The risk is computed from a vehicle-aware penalty function over slope, roughness, and step height [Wermelinger et al., 2016]. The confidence is
+The traversability grid that ships in [the Phase-1 milestone](m3-traversability) consumes a per-frame LiDAR point cloud, segments out the ground via [sector-based RANSAC](m2-ransac), bins the obstacle points into a 0.5 m grid (extent x ∈ [-5, 30] m, y ∈ [-15, 15] m, forward-biased because the supervisor only acts on terrain ahead of the vehicle), and writes a `risk` (in [0, 1]) and a `confidence` (in [0, 1]) for each cell. The risk is computed from a vehicle-aware penalty function over slope, roughness, and step height [Wermelinger et al., 2016]. The confidence is
 
 $$c_{\text{heur}}(N, r) = \min\!\left(1, \tfrac{N}{20}\right) \cdot \max\!\left(0, 1 - \tfrac{r}{30}\right)$$
 
@@ -193,11 +193,9 @@ The list is shorter than I expected when I started. Most of the obvious extensio
 
 ---
 
-## A planning rule I now use
+## A note on the prediction that flipped
 
-The plan I wrote at the start of this milestone contained a specific numerical prediction that turned out to be sign-wrong. The fix was the algebra: walking through three (r, N) pairs by hand made the predicted shape obvious, and then the exit criterion fell out of the predicted shape. That work happened a third of the way into the milestone, after the C++ was already partly written. If I had done it at the planning stage, the exit criterion would have been right from day one.
-
-So the rule for the next milestone: every numerical exit criterion should be sized against what the algorithm itself predicts under realistic parameters, not against intuition about what the comparison "should" look like. Three sample points is usually enough to catch a sign error before it costs anything.
+The plan I wrote at the start of this milestone contained a specific numerical prediction that turned out to be sign-wrong. The fix was the algebra: walking through three (r, N) pairs by hand showed the predicted shape, and the exit criterion fell out of the predicted shape. That work should have happened at the planning stage. It happened a third of the way through the milestone instead, after the C++ was already partly written, and the exit criterion had to be reshaped mid-flight.
 
 ---
 
