@@ -1,20 +1,85 @@
-# Terra Perceive
+<div align="center">
 
-**LiDAR + camera perception pipeline for unstructured terrain — Real-time traversability and worker safety for autonomous construction equipment**
+<img src="assets/hero.gif" alt="Real-time LiDAR + tracker overlay on a RELLIS-3D off-road sequence" width="92%"/>
 
-![Tests](https://img.shields.io/badge/tests-52%2F52-brightgreen)
-![Docker](https://img.shields.io/badge/docker-nishantzfyii%2Fterra--perceive-blue)
-![Language](https://img.shields.io/badge/language-C%2B%2B17-orange)
+# terra-perceive
 
-![BEV Animation](docs/assets/bev_combined_animation.gif)
+**LiDAR + camera perception for autonomous construction equipment** — sector-based ground segmentation, BEV traversability, LiDAR-inertial SLAM, multi-object tracking, and physics-grounded safety, all built from scratch in C++17 / Eigen3 on the RELLIS-3D off-road dataset.
+
+[![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C.svg?logo=c%2B%2B&logoColor=white)](https://en.cppreference.com/)
+[![ROS 2 Humble](https://img.shields.io/badge/ROS%202-Humble-22314E.svg?logo=ros&logoColor=white)](https://docs.ros.org/en/humble/)
+[![Docker](https://img.shields.io/badge/docker-nishantzfyii%2Fterra--perceive-2496ED.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/nishantzfyii/terra-perceive)
+[![Tests](https://img.shields.io/badge/tests-162%20C%2B%2B%20%2B%2031%20Python-brightgreen.svg)](tests/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Project Blog](https://img.shields.io/badge/blog-Terra%20Perceive-1f425f.svg)](https://nishant-zfyii.github.io/terra-perceive/)
+
+</div>
 
 ---
 
-## The Problem
+## What this is
 
-Autonomous systems built for highways break on construction sites. The terrain is uneven, deforming, and covered with workers who appear without warning. Standard datasets like KITTI don't capture this. Terra Perceive is an engineering deep-dive into building a perception stack that does — using raw LiDAR and camera data from the [RELLIS-3D](https://github.com/unmannedlab/RELLIS-3D) off-road dataset.
+Autonomous perception breaks at the asphalt's edge. KITTI and the highway-AV stack assume a flat ground plane and pre-mapped lanes; construction sites and unstructured off-road environments grant neither. **terra-perceive** is a from-scratch C++ perception pipeline I built to handle exactly that — sloped terrain, vegetation, occluded workers, and the LiDAR / camera failure modes that come with them. The codebase ships as a Docker image; the [project blog](https://nishant-zfyii.github.io/terra-perceive/) walks through every algorithmic decision with math, ablations, and the failure modes I hit on the way.
 
-Every core algorithm is implemented from scratch in C++17 with Eigen3. No OpenCV, no PCL for the math.
+The dataset is [RELLIS-3D](https://github.com/unmannedlab/RELLIS-3D) (Ouster OS1-64 + Basler RGB on a Warthog UGV in Texas A&M's off-road test environments). Construction-site data has the same perceptual challenges — uneven terrain, vegetation occlusion, dynamic workers — and the algorithms generalise the same way.
+
+---
+
+## Highlights
+
+- **From-scratch C++17 / Eigen3 perception stack.** Sector RANSAC ground segmentation that handles the sloped terrain global RANSAC misses (`src/ransac_ground_seg.cpp:180`), 2.5D PCA traversability grid with slope / roughness / step-height fusion (`src/traversability.cpp`), camera-LiDAR projection via SE(3) (`src/cam_lidar_projection.cpp`), kinematic safety supervisor implementing `d_stop = v²/(2μg) + v · t_react` with terrain-aware friction (`src/safety_supervisor.cpp`).
+- **From-scratch LiDAR-inertial SLAM.** SO(3) Lie groups, on-manifold IMU preintegration, Scan Context loop closure, factor-graph optimisation with Levenberg-Marquardt and sparse Cholesky (`src/pose_graph_slam.cpp`). Benchmarked against Google Cartographer; 0.577 m ATE on RELLIS-3D Seq 00. Documented in [M8](https://nishant-zfyii.github.io/terra-perceive/m8-slam).
+- **Probabilistic traversability with calibrated uncertainty.** Range-dependent LiDAR noise σ(r) propagated through per-cell PCA gives confidence with no artifact cliff at the LiDAR's nominal range. Full-sequence ablation on RELLIS-3D (2 849 frames) matches the analytical prediction within 2 %. Documented in [M12](https://nishant-zfyii.github.io/terra-perceive/m12-probabilistic-traversability).
+- **1D Control Barrier Function safety with formal guarantees.** Smooth clamp on commanded acceleration replaces the kinematic TTC step rule. 6-scenario ablation: 9–12× lower bang-bang acceleration on occluded / multi-worker scenarios; tight `d_safe_min` of 0.51 m on head-on (vs 1.76 m kinematic); zero false positives on lateral passes. Documented in [M13](https://nishant-zfyii.github.io/terra-perceive/m13-cbf-safety).
+- **162 C++ unit tests + 31 Python tests passing**, across 18 + 9 test suites (`tests/cpp/`, `tests/python/`). One-command reproducibility: `docker pull nishantzfyii/terra-perceive:phase1 && docker run …` produces a BEV map, safety event log, and per-stage timing report in roughly 45 seconds with no ROS, no CUDA, and no data download.
+
+---
+
+## Architecture
+
+<div align="center">
+<img src="assets/architecture.svg" alt="terra-perceive system architecture: data ingestion, perception, mapping & tracking, safety supervisor" width="92%"/>
+</div>
+
+A single C++ codebase organised into four production layers, each exposed as a standalone CLI runner today and (in progress) as a ROS 2 node for live deployment.
+
+**Sensing & odometry.** RELLIS-3D Ouster OS1-64 LiDAR and Basler RGB camera feed into the pipeline. Three independent pose estimators run side-by-side: GNSS/IMU extracted from the VectorNav VN-300 in the rosbag, KISS-ICP scan-to-scan registration, and Google Cartographer as a production SLAM benchmark. ATE / RPE comparison across all three is documented in [M7](https://nishant-zfyii.github.io/terra-perceive/m7-odometry); the from-scratch pose-graph backend in [M8](https://nishant-zfyii.github.io/terra-perceive/m8-slam) closes the gap with Cartographer using its own Scan Context loop closure.
+
+**Perception.** Sector RANSAC produces ground / obstacle splits with SVD refinement per angular sector. The traversability grid (0.5 m × 0.5 m, 70 × 60 cells) computes per-cell risk and confidence from PCA surface normals, with separate paths for the legacy heuristic confidence and the M12 probabilistic confidence behind a config flag. Camera-LiDAR projection assigns SegFormer (ADE20K) semantic labels per BEV cell and applies per-class risk modifiers.
+
+**Mapping, tracking & safety.** Accumulated BEV world map (M9) projects ground-plane occupancy from multi-source odometry into a global frame; NATS pub/sub carries the streams. SORT tracker with Kalman + Hungarian + DBSCAN detection (M10), augmented with IMM filter, Deep SORT cascade, and Mahalanobis gating; a Phase-4 K-frame DBSCAN ablation maps the structural ceiling that the detector layer (not the tracker) imposes on identity stability. Safety supervisor enforces priority interventions (E-Stop → Hard Brake → Proportional Scale → None) using either the kinematic TTC rule (legacy) or the M13 CBF clamp.
+
+---
+
+## Phase Roadmap
+
+| Phase | Status | Headline | Detail |
+|---|---|---|---|
+| Phase 1 — Core perception (M1–M7) | Shipped | `docker run` produces BEV + safety log in ~45 s | [Phase 1 milestones](https://nishant-zfyii.github.io/terra-perceive/) |
+| Phase 2 — Odometry, SLAM, tracking, safety refinements (M7–M13) | In progress | LiDAR-inertial SLAM 0.577 m ATE; CBF reduces bang-bang 9–12× | [Phase 2 milestones](https://nishant-zfyii.github.io/terra-perceive/) |
+| Phase 3 — Stretch goals | Planned | Open list, no timeline | [Stretch directions](https://nishant-zfyii.github.io/terra-perceive/) |
+
+---
+
+## Results
+
+<div align="center">
+<img src="assets/phase1_perception.png" alt="Phase 1 perception: six-panel BEV showing ground/obstacle, slope, roughness, step height, risk, and confidence" width="92%"/>
+</div>
+
+*Phase 1 capability — six-panel BEV showing ground/obstacle, per-cell slope, roughness, step height, fused risk score, and confidence on a single RELLIS-3D frame. Source: `src/traversability.cpp` + `scripts/run_pipeline.sh`.*
+
+<div align="center">
+<img src="assets/triple_odometry.png" alt="Triple odometry: GPS/IMU vs KISS-ICP vs Cartographer trajectories on RELLIS-3D Seq 00" width="92%"/>
+</div>
+
+*Phase 2 odometry — GPS/IMU, KISS-ICP, and Cartographer trajectories on RELLIS-3D Seq 00. ATE / RPE comparison and the analysis of where each estimator drifts is in [M7](https://nishant-zfyii.github.io/terra-perceive/m7-odometry).*
+
+<div align="center">
+<img src="assets/cbf_safety.gif" alt="M13 CBF safety: head-on intervention scenario" width="70%"/>
+</div>
+
+*M13 CBF safety — head-on scenario. The CBF-clamped supervisor stops with 0.51 m of headroom; the legacy kinematic TTC supervisor stops with 1.76 m on the same trajectory and does so with bang-bang acceleration. 6-scenario ablation in [M13](https://nishant-zfyii.github.io/terra-perceive/m13-cbf-safety).*
 
 ---
 
@@ -29,137 +94,124 @@ docker run --rm \
   nishantzfyii/terra-perceive:phase1
 ```
 
-After ~45 seconds you'll have:
+After ~45 seconds you have:
+
 ```
 output/
-  bev_traversability.png   — color-coded traversability map
-  safety_events.csv        — kinematic intervention log
-  timing_report.txt        — per-stage latency
+  bev_traversability.png   color-coded traversability map
+  safety_events.csv        kinematic intervention log
+  timing_report.txt        per-stage latency
 ```
 
-**No ROS, no CUDA, no data download required.** Sample data is bundled in the image.
+No ROS install, no CUDA, no data download. Sample RELLIS-3D frames are bundled in the image.
 
-> First time? Install Docker: `curl -fsSL https://get.docker.com | sh`
+The Docker image ships the **Phase 1** pipeline. Phase 2 components (M7 odometry, M8 SLAM, M9 BEV map, M10 tracker, M11 perception loop, M12 / M13 refinements) currently run as standalone CLI executables (`pipeline_runner`, `slam_runner`, `tracker_runner`, `accumulator_runner`) built from source — see [Reproducibility](#reproducibility). The multi-service `docker-compose` build that bakes Phase 2 into the image is part of Phase 2's remaining work.
 
 ---
 
-## Pipeline
+## Repository Structure
 
-```mermaid
-graph LR
-    A[RELLIS-3D LiDAR .bin] --> B[Sector RANSAC\nGround Segmentation]
-    B --> C[Traversability Grid\nRisk + Confidence BEV]
-    D[Camera .jpg] --> E[SegFormer\nADE20K Labels]
-    C --> F[Cam-LiDAR Fusion\nSemantic Risk Update]
-    E --> F
-    F --> G[Safety Supervisor\nTTC + Stopping Distance]
-    G --> H[Intervention Log CSV]
-```
-
----
-
-## Components
-
-| Component | What it does | Deep dive |
-|-----------|-------------|-----------|
-| **Sector RANSAC** | Splits point cloud into ground / obstacle per angular sector. Handles sloped terrain by fitting planes with SVD refinement per sector rather than globally. | [M2 blog](docs/m2-ransac.md) |
-| **Traversability Grid** | Computes per-cell risk [0,1] and confidence [0,1] from PCA surface normals, slope, roughness, and step height. Unknown cells get confidence=0, not risk=0.5. | [M3 blog](docs/m3-traversability.md) |
-| **Cam-LiDAR Fusion** | Projects LiDAR points onto the camera plane via SE(3) transforms, assigns ADE20K semantic labels per BEV cell, and applies per-class risk modifiers. | [M4 blog](docs/m4-fusion.md) |
-| **Safety Supervisor** | Physics-based TTC: `d_stop = v²/(2μg) + v·t_react`. Terrain-aware friction from traversability score. Priority interventions: E-Stop → Hard Brake → Proportional Scale → None. | [M5 blog](docs/m5-safety.md) |
-
----
-
-## Results
-
-**BEV traversability — frame 000 (RELLIS-3D seq 00000)**
-
-![BEV 2D](docs/assets/bev_2d.png)
-
-**Camera-LiDAR semantic fusion**
-
-![Fusion](docs/assets/bev_fusion_comparison.png)
-
-**Smoke test timing (local, CPU only)**
-
-| Stage | Time |
-|-------|------|
-| Sector RANSAC + Traversability | ~7s |
-| BEV Visualisation | ~3s |
-| Cam-LiDAR Fusion (SegFormer) | ~16s (weights cached) |
-| Safety Supervisor | <1s |
-| **Total** | **~27s** |
-
-**Tests: 52/52 passing**
-
-```
-test_loader        3 / 3
-test_ransac       17 / 17
-test_traversability 13 / 13
-test_projection    3 / 3
-test_safety       10 / 10
-test_kalman        3 / 3
-test_hungarian     3 / 3
-```
-
----
-
-## Repo Structure
+<details>
+<summary>Click to expand</summary>
 
 ```
 terra-perceive/
-├── src/                  # C++ implementations
-│   ├── ransac_ground_seg.cpp
-│   ├── traversability.cpp
-│   ├── cam_lidar_projection.cpp
-│   ├── safety_supervisor.cpp
-│   └── safety_runner.cpp
-├── include/              # Headers
-├── tests/cpp/            # GTest unit tests (52 total)
-├── scripts/              # Pipeline orchestration
-│   ├── run_pipeline.sh   # End-to-end runner
-│   └── smoke_test.sh     # CI smoke test
-├── python/               # SegFormer inference
-├── data/sample/          # Bundled RELLIS-3D frames (25MB)
-│   ├── lidar/            # 8 × KITTI .bin frames
-│   ├── camera/           # 8 × matching .jpg frames
-│   └── calib/            # Extrinsics + intrinsics
-└── docker/
-    ├── Dockerfile.perception
-    └── docker-compose.yml
+├── src/                        C++ implementations (sector RANSAC, traversability,
+│                               projection, safety, Kalman, Hungarian, DBSCAN,
+│                               pose graph SLAM, IMU preintegration, SORT, IMM,
+│                               appearance encoder, Scan Context, world grid)
+├── include/                    Headers
+├── tests/
+│   ├── cpp/                    GTest unit tests (18 suites, 162 tests)
+│   └── python/                 pytest tests (9 suites, 31 tests)
+├── ros2_nodes/                 Scaffolded ROS 2 nodes (currently stubs — Phase 2
+│                               remaining work; see Honest Status below)
+├── launch/                     ROS 2 launch files (full_pipeline.launch.py is a
+│                               stub pending node wiring)
+├── python/                     SegFormer / YOLOv8 inference, dashboard, fusion
+├── transport/                  protobuf schemas (NATS / gRPC)
+├── scripts/                    Pipeline orchestration, HPC SLURM, evaluation
+├── slurm/                      HPC ablation jobs
+├── data/sample/                Bundled RELLIS-3D frames (8 LiDAR + matching JPG)
+├── config/                     YAML configs (camera-LiDAR calibration, Nav2)
+├── docker/, apptainer/         Containerisation
+├── docs/                       Jekyll site published at
+│                               nishant-zfyii.github.io/terra-perceive
+└── assets/                     Figures referenced by this README
 ```
+
+</details>
 
 ---
 
-## Running Locally
+## Reproducibility
 
-**Build:**
+**Datasets.** RELLIS-3D Sequence 00 (Ouster OS1-64 LiDAR, Basler camera, VectorNav VN-300 IMU/GPS) is the primary evaluation set. nuScenes mini is the second-domain target for the in-progress M14 milestone. Full data inventory and which milestone uses which path is in [`docs/data_reference.md`](docs/data_reference.md).
+
+**Hardware assumed.** Phase 1 Docker runs on any machine with Docker installed (no GPU required). Phase 2 source builds need a Linux host with ROS 2 Humble, Eigen3, and a recent CMake; some ablations (M3 accumulation rules, M8 SLAM ablation) were run on the NYU Torch HPC cluster, others on a local workstation.
+
+**Reproducing the headline results.**
+
 ```bash
-conda activate terra-perceive
+# Phase 1 smoke test (Docker, ~45 s)
+docker run --rm -v $(pwd)/output:/ws/.../output nishantzfyii/terra-perceive:phase1
+
+# Phase 2 from source
 colcon build --packages-select construction_perception
-```
+colcon test --packages-select construction_perception   # runs C++ tests
+pytest tests/python                                       # runs Python tests
 
-**Test:**
-```bash
-colcon test --packages-select construction_perception
-colcon test-result --verbose
-```
+# Triple odometry comparison (M7)
+python scripts/extract_poses_gps.py --bag <rellis_split_raw_bag>
+python scripts/run_kiss_icp.py --bin-dir <rellis_synced_lidar>
+docker compose --profile cartographer run cartographer
 
-**Full pipeline on your own data:**
-```bash
-bash scripts/run_pipeline.sh <path/to/frame.bin> <path/to/frame.jpg>
+# LiDAR-inertial SLAM (M8)
+./build/slam_runner --sequence data/RELLIS-3D/00000 --output results/slam/
+
+# CBF safety ablation (M13)
+python scripts/run_cbf_ablation.py --scenarios all --output results/m13/
 ```
 
 ---
 
-## Stack
+## Honest Status
 
-- **C++17 + Eigen3** — all perception math, no OpenCV/PCL for core algorithms
-- **ROS2 Humble + colcon** — build system and test harness
-- **Python + HuggingFace Transformers** — SegFormer inference (nvidia/segformer-b0-finetuned-ade-512-512)
-- **Docker** — zero-dependency deployment
-- **Dataset** — RELLIS-3D (Ouster OS1-64 LiDAR + Basler camera, off-road)
+This section is the inverse of marketing copy: what works, what's stubbed, and what's next, named directly.
+
+**Shipped.** Phase 1 — sector RANSAC, traversability grid, camera-LiDAR projection, safety supervisor, Docker integration — is complete and runs end-to-end from the published image. Most of Phase 2 has shipped: triple odometry comparison (M7), from-scratch LiDAR-inertial SLAM (M8), accumulated BEV world map (M9), SORT tracker with cascade and Mahalanobis gating (M10), tracker-safety perception loop with NATS transport (M11), probabilistic traversability with σ(r) noise model (M12), 1D CBF safety clamp (M13). All 162 C++ tests across 18 suites and 31 Python tests across 9 suites pass on `main`.
+
+**Remaining in Phase 2.**
+
+- **nuScenes integration + MOTA evaluation.** The next active milestone (M14). Cross-domain validation that the same pipeline runs on urban driving data, with MOTA / MOTP / ID-switch metrics on the nuScenes mini split.
+- **ROS 2 nodes wired up.** The C++ libraries are tested and complete. The files in `ros2_nodes/*.cpp` (`ground_seg_node`, `traversability_node`, `projection_node`, `safety_node`, `tracker_node`, `traversability_costmap_layer`) are scaffolded stubs — what's missing is the subscriber / publisher glue that wraps the existing libraries as ROS 2 nodes.
+- **Full live pipeline end-to-end.** Real-time rosbag → wired ROS 2 graph → RViz2 visualisation. Today the pipeline runs as standalone CLI executables (`pipeline_runner`, `slam_runner`, `tracker_runner`, `accumulator_runner`). The multi-service `docker-compose up` that closes Phase 2 will follow node wiring.
+
+**Phase 3 stretch goals.** No timeline; treated as an open list. Candidate directions in priority order: Nav2 costmap layer plugin (`src/traversability_costmap_layer`), ROS 2 / NATS bridge, Foxglove unified dashboard for the full subject tree, IMU-based LiDAR deskewing, SegFormer fine-tune on RELLIS-3D's native 20-class scheme, full Munkres Hungarian to replace greedy assignment, Jetson deployment with TensorRT optimisation. Each is independent — pick what strengthens the strongest application.
 
 ---
 
-*Nishant Pushparaju — NYU MS Mechatronics & Robotics — 2026*
-*[Project blog](https://nishant-zfyii.github.io/terra-perceive/)*
+## Acknowledgements
+
+- **[RELLIS-3D dataset](https://github.com/unmannedlab/RELLIS-3D)** (unmannedlab, Texas A&M) — primary evaluation data.
+- **[KISS-ICP](https://github.com/PRBonn/kiss-icp)** (Vizzo et al., Bonn) — odometry baseline.
+- **[Cartographer](https://github.com/cartographer-project/cartographer)** (Google) — production SLAM benchmark.
+- **[SegFormer](https://huggingface.co/nvidia/segformer-b0-finetuned-ade-512-512)** (NVIDIA / HuggingFace) — semantic segmentation backbone.
+- **[YOLOv8](https://github.com/ultralytics/ultralytics)** (Ultralytics) — 2D detection scaffold.
+- **[Eigen3](https://eigen.tuxfamily.org/)** — linear algebra throughout.
+- Solo work — no advisor or co-author on this project.
+
+---
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
+
+---
+
+## Author
+
+**Nishant Pushparaju** · NYU MS Mechatronics & Robotics, 2026
+[nishantpushparaju@gmail.com](mailto:nishantpushparaju@gmail.com) · [github.com/Nishant-ZFYII](https://github.com/Nishant-ZFYII) · [project blog](https://nishant-zfyii.github.io/terra-perceive/)
+
+<!-- TODO: swap third link to https://nishantpushparaju.dev once the portfolio launches. -->
