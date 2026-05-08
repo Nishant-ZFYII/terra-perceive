@@ -9,6 +9,11 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
+#include <random>
+#include <vector>
+
 #include "safety_supervisor.hpp"
 
 // --- Stopping distance tests (P1-M5.1) ---
@@ -156,4 +161,166 @@ TEST(Safety, LowFrictionIncreasesStoppingDistance) {
     float d_stop_high_friction = model.compute(2.0f, supervisor.traversability_to_friction(1.0f));
     float d_stop_low_friction = model.compute(2.0f, supervisor.traversability_to_friction(0.0f));
     ASSERT_GT(d_stop_low_friction, d_stop_high_friction);
+}
+
+// --- P2-M6: CBF tests (4 new) ---
+
+namespace {
+SafetyConfig cbf_config(float gamma = 1.0f) {
+    SafetyConfig c;
+    c.safety_mode      = "cbf";
+    c.cbf_gamma        = gamma;
+    c.cbf_d_safe_min   = 0.5f;
+    c.cbf_dt           = 0.1f;
+    c.mu_base          = 0.3f;
+    c.mu_trav_scale    = 0.5f;
+    c.lidar_timeout_ms = 1e9f;  // disable lidar gate for unit tests
+    return c;
+}
+}  // namespace
+
+TEST(Safety, CbfBarrierIsPositiveWhenSafe) {
+    // With d_worker far beyond d_stop + d_safe_min, h(x) > 0 and the CBF
+    // produces no clamp (scale_factor == 1.0, level == NONE).
+    SafetyConfig config = cbf_config();
+    StoppingDistanceModel model;
+    SafetySupervisor supervisor(config, model);
+    supervisor.update_lidar_timestamp(0.0);
+
+    SafetyIntervention out =
+        supervisor.evaluate_cbf(2.0f, 25.0f, 0.0f, 1.0f, 0.0);
+    EXPECT_EQ(out.level, SafetyIntervention::NONE);
+    EXPECT_NEAR(out.scale_factor, 1.0f, 1e-3f);
+}
+
+TEST(Safety, CbfScaleStaysInBounds) {
+    // Across 500 random (v, d_worker, mu) samples, CBF's scale_factor must
+    // stay in [0, 1]. This is the basic safety property of the conversion
+    // a_safe -> v_safe -> scale; a regression here means a sign or division
+    // bug in evaluate_cbf().
+    SafetyConfig cbf = cbf_config();
+    StoppingDistanceModel model;
+
+    std::mt19937 rng(7);
+    std::uniform_real_distribution<float> v_dist(0.0f, 5.0f);
+    std::uniform_real_distribution<float> d_dist(0.1f, 50.0f);
+    std::uniform_real_distribution<float> trav_dist(0.0f, 1.0f);
+
+    SafetySupervisor sup(cbf, model);
+    sup.update_lidar_timestamp(0.0);
+    for (int i = 0; i < 500; ++i) {
+        auto out = sup.evaluate_cbf(v_dist(rng), d_dist(rng), 0.0f,
+                                    trav_dist(rng), 0.0);
+        ASSERT_GE(out.scale_factor, 0.0f);
+        ASSERT_LE(out.scale_factor, 1.0f + 1e-6f);
+    }
+}
+
+TEST(Safety, CbfNeverCollidesAcrossScenarios) {
+    // The forward-invariance promise of CBF: starting safely (h(x_0) > 0),
+    // the controlled vehicle should never reach d <= 0 against a stationary
+    // worker, across a range of starting conditions.
+    StoppingDistanceModel model;
+    SafetyConfig config = cbf_config();
+    const float dt = config.cbf_dt;
+
+    struct Scenario { float v0; float d0; };
+    std::vector<Scenario> cases = {
+        {1.0f,  6.0f},   // slow + close
+        {2.0f,  8.0f},   // typical
+        {3.0f, 12.0f},   // faster
+        {4.0f, 20.0f},   // fast + far
+        {2.0f, 30.0f},   // long approach
+    };
+    for (auto s : cases) {
+        SafetySupervisor sup(config, model);
+        sup.update_lidar_timestamp(0.0);
+        float v = s.v0;
+        float d = s.d0;
+        bool collided = false;
+        for (int i = 0; i < 600; ++i) {
+            sup.update_lidar_timestamp(i * dt);
+            auto out = sup.evaluate(v, d, 0.0f, 1.0f, i * dt);
+            v = v * out.scale_factor;
+            d -= v * dt;
+            if (d <= 0.0f) { collided = true; break; }
+            if (v < 1e-3f && i > 20) break;
+        }
+        EXPECT_FALSE(collided)
+            << "v0=" << s.v0 << " d0=" << s.d0 << " collided.";
+        EXPECT_GT(d, 0.0f);
+    }
+}
+
+TEST(Safety, CbfVelocityProfileSmooth) {
+    // Drive a head-on simulation: vehicle starts at 2 m/s, worker stationary
+    // 8m ahead. Integrate v with the CBF scale at dt=0.1s for 60 steps and
+    // assert max |dv/dt| stays bounded (smooth, not bang-bang).
+    SafetyConfig config = cbf_config();
+    StoppingDistanceModel model;
+    SafetySupervisor supervisor(config, model);
+    supervisor.update_lidar_timestamp(0.0);
+
+    const float dt = config.cbf_dt;
+    float v = 2.0f;
+    float d = 8.0f;
+    float worker_speed = 0.0f;  // stationary worker
+    float trav = 1.0f;
+    std::vector<float> v_traj;
+    v_traj.reserve(60);
+    for (int i = 0; i < 60; ++i) {
+        supervisor.update_lidar_timestamp(i * dt);
+        auto out = supervisor.evaluate(v, d, worker_speed, trav, i * dt);
+        v = v * out.scale_factor;
+        v_traj.push_back(v);
+        d -= (v - worker_speed) * dt;
+        if (d < 0.0f) break;  // collision (should not happen)
+    }
+    ASSERT_GE(v_traj.size(), 10u);
+
+    float max_step = 0.0f;
+    for (size_t i = 1; i < v_traj.size(); ++i) {
+        float step = std::fabs(v_traj[i] - v_traj[i - 1]) / dt;
+        if (step > max_step) max_step = step;
+    }
+    // Kinematic mode would step from cruise to 0.1*v in a single 0.1s frame
+    // (|dv/dt| = 18 m/s^2 at v=2). CBF should be far smoother.
+    EXPECT_LT(max_step, 10.0f) << "CBF velocity steps should be smooth.";
+}
+
+TEST(Safety, CbfStoppingMarginConverges) {
+    // Across gamma in {0.5, 1.0, 2.0}, the head-on simulation must terminate
+    // with a final margin (d_worker - d_stop) inside [d_safe_min - 0.2, d_safe_min + 1.5].
+    // Hard floor: no collision (d > 0) at any timestep, all gammas.
+    StoppingDistanceModel model;
+    for (float gamma : {0.5f, 1.0f, 2.0f}) {
+        SafetyConfig config = cbf_config(gamma);
+        SafetySupervisor supervisor(config, model);
+        supervisor.update_lidar_timestamp(0.0);
+
+        const float dt = config.cbf_dt;
+        float v = 2.0f;
+        float d = 12.0f;
+        float trav = 1.0f;
+        bool collision = false;
+        for (int i = 0; i < 300; ++i) {
+            supervisor.update_lidar_timestamp(i * dt);
+            auto out = supervisor.evaluate(v, d, 0.0f, trav, i * dt);
+            v = v * out.scale_factor;
+            d -= v * dt;
+            if (d <= 0.0f) { collision = true; break; }
+            if (v < 1e-3f && i > 10) break;  // converged
+        }
+        EXPECT_FALSE(collision) << "gamma=" << gamma << " collided.";
+        // Vehicle stopped: final margin = d. Must be near d_safe_min, not
+        // pinned at 0 (would mean the clamp never engaged) and not deep
+        // negative (collision).
+        float mu = supervisor.traversability_to_friction(trav);
+        float d_stop_at_v = model.compute(v, mu);
+        float margin = d - d_stop_at_v;
+        EXPECT_GT(margin, config.cbf_d_safe_min - 0.2f)
+            << "gamma=" << gamma << " final margin too small.";
+        EXPECT_LT(margin, config.cbf_d_safe_min + 1.5f)
+            << "gamma=" << gamma << " final margin unexpectedly large.";
+    }
 }

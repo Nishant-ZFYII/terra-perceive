@@ -45,13 +45,21 @@ Phase 1 handles single frames. Phase 2 adds the temporal dimension — where is 
 | [M10: SORT Tracker](m10-sort-tracker) | Kalman + Hungarian + DBSCAN from scratch; IMM + Deep SORT cascade + Mahalanobis gate; Phase-4 K-frame DBSCAN sweep mapping the structural ceiling | Completed |
 | [M11: Tracker-Safety Loop](m5-pipeline) | YOLO + cam-LiDAR projection + SORT + safety supervisor + NATS + JetStream audit trail | Completed |
 
-### Evaluation & Generalization
+### Perception & Safety Refinement
+
+The Phase-1 traversability and safety supervisor both shipped with formulas chosen for simplicity, not physical justification. M12 and M13 replace each with a derivation-grounded version, both behind config switches so the legacy paths stay bit-for-bit unchanged.
 
 | Milestone | Implementation | Status |
 |-----------|----------------|--------|
-| M12: Ablation Study | Probabilistic traversability vs heuristic, CBF vs kinematic TTC | Planned |
-| M13: nuScenes | Unified calibration adapter, second domain validation | Planned |
-| M14–M17 | MOTA eval, 3D viz, ROS2 live pipeline, final ship | Planned |
+| [M12: Probabilistic Traversability](m12-probabilistic-traversability) | Range-dependent LiDAR noise σ(r) propagated through per-cell PCA → calibrated confidence with no artifact cliff. Full-sequence ablation on RELLIS-3D (2849 frames): integrated AUC of \|c_prob − c_heur\| over r ∈ [5, 30] m = 5.51, matching prediction within 2%. Ships with raw-LiDAR + per-cell + Open3D chase-cam visualizations. | Completed |
+| [M13: CBF Safety](m13-cbf-safety) | 1D scalar Control Barrier Function clamp on commanded acceleration; 6-scenario ablation against the kinematic TTC step rule. Bang-bang elimination on occluded / multi-worker (max \|dv/dt\| 9-12× lower); tight d_safe_min stops on head-on (0.51 m vs 1.76 m kinematic); zero false positives on lateral passes. | Completed |
+
+### Cross-domain Evaluation & Generalization
+
+| Milestone | Implementation | Status |
+|-----------|----------------|--------|
+| M14: nuScenes | Unified calibration adapter, second domain validation | Planned |
+| M15–M17 | MOTA eval, 3D viz, ROS2 live pipeline, final ship | Planned |
 
 ## Phase 3: Deployment (Stretch)
 

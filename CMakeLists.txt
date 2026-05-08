@@ -108,6 +108,11 @@ target_link_libraries(accumulator_runner
     point_cloud_loader ransac_ground_seg
     so3 imu_preintegration Eigen3::Eigen)
 
+# --- P2-M6 traversability runner (confidence-mode ablation CLI) ---
+add_executable(traversability_runner src/traversability_runner.cpp)
+target_link_libraries(traversability_runner
+    traversability ransac_ground_seg point_cloud_loader Eigen3::Eigen)
+
 # --- P2-M4 tracker runner ---
 add_executable(tracker_runner src/tracker_runner.cpp)
 target_link_libraries(tracker_runner

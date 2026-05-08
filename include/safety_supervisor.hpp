@@ -70,6 +70,18 @@ struct SafetyConfig {
     float lidar_timeout_ms = 200.0f;    // trigger e-stop if no LiDAR for this long
     float loop_rate_hz = 50.0f;
     float loop_warn_ms = 20.0f;         // warn if loop exceeds this
+
+    // P2-M6: Control Barrier Function clamp on commanded acceleration.
+    // safety_mode = "kinematic" preserves the legacy TTC step-function.
+    // safety_mode = "cbf"       activates the 1D scalar CBF clamp:
+    //   h(v, d_w) = d_w - (v^2/(2 mu g) + v t_react + cbf_d_safe_min)
+    //   a_safe = (cbf_gamma * h - v_relative) / (v/(mu g) + t_react)
+    //   scale_factor = max(0, v + a_safe * cbf_dt) / max(epsilon, v).
+    // See notes/m6_math_sketch.md §2 and docs/m13-cbf-safety.md.
+    std::string safety_mode = "kinematic";
+    float cbf_gamma       = 1.0f;       // class-K gain alpha(h) = gamma * h
+    float cbf_d_safe_min  = 0.5f;       // minimum margin beyond d_stop (m)
+    float cbf_dt          = 0.1f;       // control step for scale-factor conversion (s)
 };
 
 class SafetySupervisor {
@@ -103,6 +115,14 @@ class SafetySupervisor {
     
 
 
+    // P2-M6: 1D scalar Control Barrier Function clamp on commanded acceleration.
+    // Public so safety_runner can drive it directly during ablation runs.
+    SafetyIntervention evaluate_cbf(float vehicle_velocity_mps,
+                                    float d_to_nearest_worker,
+                                    float worker_approach_speed,
+                                    float terrain_traversability,
+                                    double current_timestamp);
+
    private:
     SafetyConfig config_;
     StoppingDistanceModel model_;
@@ -115,4 +135,11 @@ class SafetySupervisor {
     //monitor loop latency
     std::vector<double> loop_latencies_ms_;
     void loop_latency();
+
+    // P2-M6: factored sensor-health pre-check shared by kinematic and CBF
+    // evaluate() paths. Returns true (and populates `out`) when an e-stop is
+    // forced by LiDAR timeout; returns false otherwise so the caller proceeds
+    // to its own decision logic.
+    bool pre_evaluate_health(double current_timestamp,
+                             SafetyIntervention& out);
 };

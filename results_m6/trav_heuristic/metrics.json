@@ -1,0 +1,11 @@
+{
+  "confidence_mode": "heuristic",
+  "sigma_0": 0.010000,
+  "sigma_k": 0.000100,
+  "lidar_dir": "/media/nishant/SeeGayt2/terra_perceive/m4_perframe/extracted_frames/",
+  "n_frames": 2849,
+  "mean_observed_cells": 974.879256,
+  "mean_confidence": 0.375581,
+  "mean_risk": 0.328942,
+  "runtime_sec": 857.866752
+}

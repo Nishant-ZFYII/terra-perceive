@@ -1,0 +1,11 @@
+{
+  "safety_mode": "cbf",
+  "cbf_gamma": 1.000000,
+  "cbf_d_safe_min": 0.500000,
+  "scenario": "/home/nishant/MS_Project/terra-perceive/scripts/m6/scenarios/edge_of_arc.csv",
+  "steps": 100,
+  "collisions": 0,
+  "min_margin": 5.546034,
+  "max_dv_per_dt": 0.000000,
+  "final_velocity": 2.000000
+}

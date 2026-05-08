@@ -221,3 +221,97 @@ TEST(Traversability, RoughSurface) {
     EXPECT_GT(cell.roughness, vehicle.max_roughness_tolerance);
     EXPECT_GT(cell.risk, 0.0f);
 }
+
+// --- P2-M6: probabilistic confidence tests (4 new) ---
+
+TEST(Traversability, NoiseModelMatchesDatasheet) {
+    // sigma(r) = sigma_0 + k * r^2 with defaults sigma_0=0.01, k=0.0001.
+    // Anchor against Ouster OS1-64 datasheet expectations (within 5% of the
+    // values our M6 math sketch derives).
+    LidarNoiseModel m;
+    EXPECT_NEAR(lidar_sigma(2.0f, m),  0.0104f, 1e-4f);
+    EXPECT_NEAR(lidar_sigma(25.0f, m), 0.0725f, 1e-3f);
+    EXPECT_NEAR(lidar_sigma(50.0f, m), 0.260f,  5e-3f);
+}
+
+TEST(Traversability, ProbabilisticDegradesWithNoise) {
+    // Same flat cell, same point count, same range — only the LiDAR noise
+    // model's k changes. Probabilistic mode must respond; heuristic does not.
+    GridParams params_low = test_grid_params();
+    params_low.confidence_mode = ConfidenceMode::Probabilistic;
+    params_low.noise_model.sigma_0 = 0.01f;
+    params_low.noise_model.k = 0.0001f;
+
+    GridParams params_high = params_low;
+    params_high.noise_model.k = 0.01f;  // 100x more far-range noise
+
+    VehicleKinematics vehicle = test_vehicle();
+    auto pts = make_flat_points(params_low, 50, 30, 20);  // ix=50 -> x~20m, far enough that noise matters
+
+    TraversabilityGrid grid_low(params_low, vehicle);
+    grid_low.compute(pts);
+    TraversabilityGrid grid_high(params_high, vehicle);
+    grid_high.compute(pts);
+
+    EXPECT_GT(grid_low.at(50, 30).confidence, grid_high.at(50, 30).confidence)
+        << "Increasing k must lower probabilistic confidence on the same cell.";
+
+    // Heuristic is invariant to the noise model. Sanity-check the contrast.
+    GridParams params_heur = params_low;
+    params_heur.confidence_mode = ConfidenceMode::Heuristic;
+    TraversabilityGrid grid_heur(params_heur, vehicle);
+    grid_heur.compute(pts);
+    GridParams params_heur_high = params_high;
+    params_heur_high.confidence_mode = ConfidenceMode::Heuristic;
+    TraversabilityGrid grid_heur_high(params_heur_high, vehicle);
+    grid_heur_high.compute(pts);
+    EXPECT_NEAR(grid_heur.at(50, 30).confidence,
+                grid_heur_high.at(50, 30).confidence, 1e-6f)
+        << "Heuristic must not respond to the noise model.";
+}
+
+TEST(Traversability, EigenvalueRatioReflectsPlanarity) {
+    // Flat cell -> low lambda_min/lambda_max -> high probabilistic confidence.
+    // Rough cell at the same range and point count -> low probabilistic confidence.
+    GridParams params = test_grid_params();
+    params.confidence_mode = ConfidenceMode::Probabilistic;
+    VehicleKinematics vehicle = test_vehicle();
+
+    auto flat_pts  = make_flat_points (params, 20, 30, 20);  // ix=20 -> x~5m
+    auto rough_pts = make_rough_points(params, 20, 30, 20);
+
+    TraversabilityGrid grid_flat(params, vehicle);
+    grid_flat.compute(flat_pts);
+    TraversabilityGrid grid_rough(params, vehicle);
+    grid_rough.compute(rough_pts);
+
+    const float c_flat  = grid_flat.at(20, 30).confidence;
+    const float c_rough = grid_rough.at(20, 30).confidence;
+
+    EXPECT_GT(c_flat, 0.5f) << "Flat cell at ~5m with 20 points should be confident.";
+    EXPECT_LT(c_rough, c_flat) << "Rough cell must score strictly lower than flat.";
+}
+
+TEST(Traversability, HeuristicAndProbabilisticAgreeAtCloseRange) {
+    // At close range with N >= 15, the two confidence formulas should agree
+    // within 0.2. The probabilistic curve only diverges meaningfully past r ~ 8m.
+    GridParams params_h = test_grid_params();
+    params_h.confidence_mode = ConfidenceMode::Heuristic;
+    GridParams params_p = test_grid_params();
+    params_p.confidence_mode = ConfidenceMode::Probabilistic;
+
+    VehicleKinematics vehicle = test_vehicle();
+    auto pts = make_flat_points(params_h, 14, 30, 20);  // ix=14 -> x~2m, range~2m
+
+    TraversabilityGrid grid_h(params_h, vehicle);
+    grid_h.compute(pts);
+    TraversabilityGrid grid_p(params_p, vehicle);
+    grid_p.compute(pts);
+
+    const float c_h = grid_h.at(14, 30).confidence;
+    const float c_p = grid_p.at(14, 30).confidence;
+
+    EXPECT_GT(c_h, 0.5f) << "Heuristic should be high at close range with N=20.";
+    EXPECT_GT(c_p, 0.5f) << "Probabilistic should also be high at close range.";
+    EXPECT_NEAR(c_h, c_p, 0.2f);
+}

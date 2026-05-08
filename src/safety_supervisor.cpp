@@ -45,23 +45,43 @@ TTCResult SafetySupervisor::compute_ttc(float vehicle_velocity, float d_worker,
     return r;
 }
 
+// P2-M6: shared sensor-health gate. Returns true and fills `out` if a
+// LiDAR-timeout e-stop is forced; both kinematic and CBF paths short-circuit
+// on a true return.
+bool SafetySupervisor::pre_evaluate_health(double current_timestamp,
+                                           SafetyIntervention& out) {
+    if (!lidar_initialized_
+        || (current_timestamp - last_lidar_timestamp_) * 1000.0
+               > config_.lidar_timeout_ms) {
+        out.level = SafetyIntervention::EMERGENCY_STOP;
+        out.scale_factor = 0.0f;
+        out.reason = "LiDAR timeout";
+        return true;
+    }
+    return false;
+}
+
 SafetyIntervention SafetySupervisor::evaluate(float vehicle_velocity_mps,
                                               float d_to_nearest_worker,
                                               float worker_approach_speed,
                                               float terrain_traversability,
                                               double current_timestamp) {
+    // P2-M6: branch on safety_mode. Per Fork 2 of the M6 plan, CBF gets its
+    // own evaluator; the kinematic path stays bit-for-bit unchanged.
+    if (config_.safety_mode == "cbf") {
+        return evaluate_cbf(vehicle_velocity_mps, d_to_nearest_worker,
+                            worker_approach_speed, terrain_traversability,
+                            current_timestamp);
+    }
+
     auto start = std::chrono::high_resolution_clock::now();
     SafetyIntervention intervention;
-    float mu = traversability_to_friction(terrain_traversability); 
+    float mu = traversability_to_friction(terrain_traversability);
     TTCResult ttc = compute_ttc(vehicle_velocity_mps, d_to_nearest_worker,
                                 worker_approach_speed, mu);
     //Decision
-    if(!lidar_initialized_ || (current_timestamp - last_lidar_timestamp_) * 1000.0 > config_.lidar_timeout_ms) {
-        //Emergency stop if LiDAR timeout
-        intervention.level = SafetyIntervention::EMERGENCY_STOP;
-        intervention.scale_factor = 0.0f;
-        intervention.reason = "LiDAR timeout";
-
+    if (pre_evaluate_health(current_timestamp, intervention)) {
+        // health gate already populated `intervention` with the e-stop.
     }
     else if (ttc.ttc_seconds <= 0.0f ) {
         //Emergency stop
@@ -145,8 +165,97 @@ void SafetySupervisor::loop_latency() {
     std::cout << "Loop Latency - P50: " << p50 << " ms, P95: " << p95 << " ms" << std::endl;
 }
 
-void SafetySupervisor::report_latency_stats() {                                                                                      
-      loop_latency();                      
-}    
+void SafetySupervisor::report_latency_stats() {
+      loop_latency();
+}
+
+// P2-M6: 1D scalar Control Barrier Function clamp on commanded acceleration.
+// Derivation in notes/m6_math_sketch.md §2.3:
+//   h(v, d_w) = d_w - [v^2/(2 mu g) + v t_react + cbf_d_safe_min]
+//   A         = v/(mu g) + t_react
+//   a_safe    = (gamma * h - v_relative) / A
+// Convert to the existing scale_factor API:
+//   v_safe = max(0, v + a_safe * cbf_dt); scale = clamp(v_safe / v, 0, 1).
+SafetyIntervention SafetySupervisor::evaluate_cbf(float vehicle_velocity_mps,
+                                                  float d_to_nearest_worker,
+                                                  float worker_approach_speed,
+                                                  float terrain_traversability,
+                                                  double current_timestamp) {
+    auto start = std::chrono::high_resolution_clock::now();
+    SafetyIntervention intervention;
+    if (pre_evaluate_health(current_timestamp, intervention)) {
+        events_.push_back(SafetyEvent{
+            .timestamp = current_timestamp,
+            .rule = intervention.reason,
+            .d_worker = d_to_nearest_worker,
+            .d_stop = std::numeric_limits<float>::quiet_NaN(),
+            .ttc = std::numeric_limits<float>::quiet_NaN(),
+            .friction_mu = traversability_to_friction(terrain_traversability),
+            .vel_before = vehicle_velocity_mps,
+            .vel_after = 0.0f
+        });
+        return intervention;
+    }
+
+    const float mu = traversability_to_friction(terrain_traversability);
+    const float v  = std::max(0.0f, vehicle_velocity_mps);
+    const float v_relative = v - worker_approach_speed;  // matches kinematic convention
+
+    const float d_stop = model_.compute(v, mu);
+    const float h      = d_to_nearest_worker - (d_stop + config_.cbf_d_safe_min);
+    const float A      = (mu > 0.0f)
+                         ? v / (mu * model_.gravity) + model_.reaction_time_s
+                         : std::numeric_limits<float>::infinity();
+
+    float a_safe;
+    if (!std::isfinite(A) || A < 1e-6f) {
+        // Degenerate: no friction or no leverage. Treat as full stop.
+        a_safe = -std::numeric_limits<float>::infinity();
+    } else {
+        a_safe = (config_.cbf_gamma * h - v_relative) / A;
+    }
+
+    const float v_safe = std::max(0.0f, v + a_safe * config_.cbf_dt);
+    float scale;
+    if (v > 1e-6f) {
+        scale = std::clamp(v_safe / v, 0.0f, 1.0f);
+    } else {
+        // At rest: positive a_safe means "ok to start moving"; we still report
+        // scale=1.0 (the upstream commanded velocity stands), since the API
+        // is multiplicative on commanded velocity.
+        scale = 1.0f;
+    }
+    intervention.scale_factor = scale;
+
+    if (scale <= 1e-3f) {
+        intervention.level = SafetyIntervention::EMERGENCY_STOP;
+        intervention.reason = "CBF: v_safe ~ 0";
+    } else if (scale < 0.5f) {
+        intervention.level = SafetyIntervention::HARD_BRAKE;
+        intervention.reason = "CBF: hard clamp";
+    } else if (scale < 1.0f) {
+        intervention.level = SafetyIntervention::PROPORTIONAL_SCALE;
+        intervention.reason = "CBF: smooth clamp";
+    } else {
+        intervention.level = SafetyIntervention::NONE;
+        intervention.reason = "CBF: h > 0 no clamp";
+    }
+
+    events_.push_back(SafetyEvent{
+        .timestamp = current_timestamp,
+        .rule = intervention.reason,
+        .d_worker = d_to_nearest_worker,
+        .d_stop = d_stop,
+        .ttc = h,                // overload ttc column with h(x) for CBF events
+        .friction_mu = mu,
+        .vel_before = vehicle_velocity_mps,
+        .vel_after = vehicle_velocity_mps * scale
+    });
+
+    auto end = std::chrono::high_resolution_clock::now();
+    double latency_ms = std::chrono::duration<double, std::milli>(end - start).count();
+    log_loop_latency(latency_ms);
+    return intervention;
+}
 
 

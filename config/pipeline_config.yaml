@@ -41,6 +41,14 @@ traversability:
   y_max: 15.0
   min_points_per_cell: 3
 
+  # P2-M6: confidence-mode toggle and LiDAR noise model.
+  # heuristic     -> legacy P1-M3 formula (count_factor * range_factor).
+  # probabilistic -> noise-aware confidence (sigma(r) -> PCA -> calibrated [0,1]).
+  # See docs/m12-probabilistic-traversability.md and notes/m6_math_sketch.md.
+  confidence_mode: heuristic   # heuristic | probabilistic
+  lidar_sigma_0: 0.01          # Ouster OS1-64 near-range noise floor (m)
+  lidar_sigma_k: 0.0001        # quadratic-in-range coefficient (m / m^2)
+
 # --- Kinematic safety supervisor ---
 safety:
   # Stopping distance model
@@ -60,6 +68,14 @@ safety:
   lidar_timeout_ms: 200.0
   loop_rate_hz: 50
   loop_warn_ms: 20.0
+
+  # P2-M6: Control Barrier Function clamp on commanded acceleration.
+  # kinematic -> legacy step-function intervention.
+  # cbf       -> 1D scalar CBF clamp (a_cmd <= (gamma*h - v_relative)/A).
+  # See docs/m13-cbf-safety.md and notes/m6_math_sketch.md §2.
+  safety_mode: kinematic       # kinematic | cbf
+  cbf_gamma: 1.0               # CBF class-K gain (alpha(h) = gamma*h)
+  cbf_d_safe_min: 0.5          # minimum allowed margin beyond d_stop (m)
 
 # --- Camera-LiDAR projection ---
 # See config/camera_lidar_calib.yaml for extrinsic/intrinsic matrices

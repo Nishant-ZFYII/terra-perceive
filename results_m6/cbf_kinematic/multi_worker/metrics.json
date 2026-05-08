@@ -1,0 +1,11 @@
+{
+  "safety_mode": "kinematic",
+  "cbf_gamma": 1.000000,
+  "cbf_d_safe_min": 0.500000,
+  "scenario": "/home/nishant/MS_Project/terra-perceive/scripts/m6/scenarios/multi_worker.csv",
+  "steps": 65,
+  "collisions": 0,
+  "min_margin": 2.245617,
+  "max_dv_per_dt": 14.473969,
+  "final_velocity": 0.000828
+}

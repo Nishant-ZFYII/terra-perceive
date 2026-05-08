@@ -1,0 +1,11 @@
+{
+  "safety_mode": "cbf",
+  "cbf_gamma": 1.000000,
+  "cbf_d_safe_min": 0.500000,
+  "scenario": "/home/nishant/MS_Project/terra-perceive/scripts/m6/scenarios/multi_worker.csv",
+  "steps": 35,
+  "collisions": 0,
+  "min_margin": 1.034499,
+  "max_dv_per_dt": 1.564108,
+  "final_velocity": 0.000000
+}

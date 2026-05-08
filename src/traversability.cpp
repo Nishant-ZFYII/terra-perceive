@@ -5,12 +5,18 @@
 #include "traversability.hpp"
 #include <iostream>
 #include <cmath>
-#include <algorithm> 
+#include <algorithm>
 #include <limits>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846f  // define M_PI if not defined by cmath
 #endif
+
+// P2-M6: range-noise model. sigma(r) = sigma_0 + k * r^2.
+// See notes/m6_math_sketch.md §1.2 for derivation and datasheet anchor points.
+float lidar_sigma(float r, const LidarNoiseModel& m) {
+    return m.sigma_0 + m.k * r * r;
+}
 
 TraversabilityGrid::TraversabilityGrid(const GridParams& params,
                                        const VehicleKinematics& vehicle)
@@ -94,9 +100,21 @@ void TraversabilityGrid::compute(const std::vector<Eigen::Vector3f>& ground_pts)
 
             //risk = 1.0 - compute_vehicle_aware_score(slope_deg, roughness, step_height)
             cell.risk = 1.0f - compute_vehicle_aware_score(cell.slope_deg, cell.roughness, cell.step_height);
-            cell.confidence = compute_confidence(point_count, cell.range_from_sensor);
 
-
+            // P2-M6: branch on confidence_mode. Heuristic path is unchanged from P1-M3.
+            // Probabilistic path reuses the eigenvalues already computed inline above
+            // (no extra eigendecomposition cost).
+            if (params_.confidence_mode == ConfidenceMode::Probabilistic
+                && solver.info() == Eigen::Success) {
+                NormalEstimate est;
+                est.eigenvalues = solver.eigenvalues();  // ascending
+                est.normal = solver.eigenvectors().col(0);
+                est.point_count = point_count;
+                est.mean_sigma_r = lidar_sigma(cell.range_from_sensor, params_.noise_model);
+                cell.confidence = compute_probabilistic_confidence(est);
+            } else {
+                cell.confidence = compute_confidence(point_count, cell.range_from_sensor);
+            }
         }
     }
 }
@@ -194,6 +212,77 @@ Eigen::Vector3f TraversabilityGrid::compute_normal(
         return Eigen::Vector3f::UnitZ();
     }
     //Return eigenvectors().col(0) — smallest eigenvalue's eigenvector
-    
+
     return solver.eigenvectors().col(0);
+}
+
+// P2-M6: sibling of compute_normal that also returns the eigenvalues and the
+// per-cell mean sigma(r). See notes/m6_math_sketch.md §1.3-1.4.
+NormalEstimate TraversabilityGrid::compute_normal_with_eigenvalues(
+    const std::vector<Eigen::Vector3f>& pts) const {
+    NormalEstimate est;
+    est.point_count = static_cast<int>(pts.size());
+    if (est.point_count == 0) {
+        return est;
+    }
+    Eigen::Vector3f mean = Eigen::Vector3f::Zero();
+    for (const auto& pt : pts) mean += pt;
+    mean /= static_cast<float>(est.point_count);
+
+    Eigen::Matrix3f C = Eigen::Matrix3f::Zero();
+    float sum_range = 0.0f;
+    for (const auto& pt : pts) {
+        Eigen::Vector3f d = pt - mean;
+        C += d * d.transpose();
+        sum_range += pt.norm();
+    }
+    C /= static_cast<float>(est.point_count);
+    float mean_range = sum_range / static_cast<float>(est.point_count);
+    est.mean_sigma_r = lidar_sigma(mean_range, params_.noise_model);
+
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> solver(C);
+    if (solver.info() != Eigen::Success) {
+        return est;
+    }
+    est.eigenvalues = solver.eigenvalues();  // ascending: [lambda_min, lambda_mid, lambda_max]
+    est.normal = solver.eigenvectors().col(0);
+    if (est.normal.z() < 0.0f) est.normal = -est.normal;
+    return est;
+}
+
+// P2-M6: probabilistic confidence. Three multiplicative factors:
+//   planarity      — fraction of lambda_max not consumed by signal-above-noise.
+//   sample_factor  — saturating function of point count.
+//   range_factor   — lambda_max / (lambda_max + sigma^2).
+// All bounded in [0, 1]; product is in [0, 1].
+float TraversabilityGrid::compute_probabilistic_confidence(const NormalEstimate& est) const {
+    if (est.point_count <= 0) return 0.0f;
+
+    const float lambda_min = est.eigenvalues(0);
+    const float lambda_max = est.eigenvalues(2);
+    const float sigma2 = est.mean_sigma_r * est.mean_sigma_r;
+
+    // Factor 1: planarity above the noise floor. lambda_min is floored at sigma^2
+    // by per-point noise even on a perfectly planar surface, so subtract sigma^2
+    // before dividing by lambda_max.
+    float lambda_min_signal = std::max(0.0f, lambda_min - sigma2);
+    float planarity = 1.0f;
+    if (lambda_max > 1e-9f) {
+        planarity = std::max(0.0f, 1.0f - lambda_min_signal / lambda_max);
+    }
+
+    // Factor 2: sample size. N_ref=10 chosen so 10 points -> ~0.63, 20 points -> ~0.86.
+    constexpr float N_ref = 10.0f;
+    float sample_factor = 1.0f - std::exp(-static_cast<float>(est.point_count) / N_ref);
+
+    // Factor 3: noise vs cell-scale geometry. When sigma^2 ~ lambda_max, the
+    // measurement is too noisy to resolve cell-scale structure; range_factor -> 0.5
+    // and the cell loses confidence even if it looks planar.
+    float range_factor = 0.0f;
+    if (lambda_max + sigma2 > 1e-12f) {
+        range_factor = lambda_max / (lambda_max + sigma2);
+    }
+
+    float c = planarity * sample_factor * range_factor;
+    return std::clamp(c, 0.0f, 1.0f);
 }
