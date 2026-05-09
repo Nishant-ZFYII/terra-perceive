@@ -52,7 +52,7 @@ Each milestone shipped with a long-form blog post that walks through the math, t
 
 <table>
 <tr>
-<td width="33%"><a href="https://nishant-zfyii.github.io/terra-perceive/m8-slam"><img src="assets/four_trajectory_comparison.png" alt="M8 SLAM" width="100%"/></a><br/><b>M8 — LiDAR-inertial SLAM from scratch</b><br/>SO(3) Lie groups, on-manifold IMU preintegration, Scan Context loop closure, factor-graph backend with LM + sparse Cholesky. Benchmarked against Cartographer.</td>
+<td width="33%"><a href="https://nishant-zfyii.github.io/terra-perceive/m8-slam"><img src="docs/assets/four_trajectory_comparison.png" alt="M8 SLAM" width="100%"/></a><br/><b>M8 — LiDAR-inertial SLAM from scratch</b><br/>SO(3) Lie groups, on-manifold IMU preintegration, Scan Context loop closure, factor-graph backend with LM + sparse Cholesky. Benchmarked against Cartographer.</td>
 <td width="33%"><a href="https://nishant-zfyii.github.io/terra-perceive/m9-bev-map"><img src="docs/assets/m3/hero_dashboard_demo.gif" alt="M9 BEV map + NATS" width="100%"/></a><br/><b>M9 — Accumulated BEV map + NATS transport</b><br/>Persistent world map from multi-source odometry; pub/sub stream over NATS with JetStream audit; 4-source ablation on RELLIS.</td>
 <td width="33%"><a href="https://nishant-zfyii.github.io/terra-perceive/m10-sort-tracker"><img src="docs/assets/m10/hero_clip_motion.gif" alt="M10 SORT + IMM cascade" width="100%"/></a><br/><b>M10 — SORT from scratch + IMM cascade</b><br/>Kalman + Hungarian + DBSCAN baseline, then IMM filter, Deep SORT appearance, Mahalanobis gate. K-frame ablation maps the detector ceiling.</td>
 </tr>
