@@ -36,7 +36,7 @@
 | End-to-end Docker repro time | **45 s** | — | this repo |
 | Tests | **162 C++ + 31 Python** across 18 + 9 suites | — | this repo |
 
-The CBF row is honest: CBF doesn't promise smoother braking, it promises *just enough* braking to stay inside the safe set. The kinematic supervisor was over-conservative; CBF achieves the formal guarantee with tighter margin and (correspondingly) sharper response. The full ablation across all six scenarios is in [M13](https://nishant-zfyii.github.io/terra-perceive/m13-cbf-safety).
+The CBF row is honest: CBF doesn't promise smoother braking, it promises *just enough* braking to stay inside the safe set. The kinematic supervisor was over-conservative; CBF achieves the formal guarantee with tighter margin and (correspondingly) sharper response. This is the intended trade-off — CBFs guarantee safe-set membership, not minimum-jerk smoothness; if you want both, you compose a CBF with a comfort term in the QP, which is the natural Phase 3 extension. The full ablation across all six scenarios is in [M13](https://nishant-zfyii.github.io/terra-perceive/m13-cbf-safety).
 
 ---
 
