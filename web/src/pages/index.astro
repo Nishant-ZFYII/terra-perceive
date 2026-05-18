@@ -1,0 +1,203 @@
+---
+import Base from '~/layouts/Base.astro';
+import { milestonesByPhase } from '~/lib/post-order';
+import { withBase } from '~/lib/url';
+
+// Phase tables, status dots and links are all derived from the single
+// MILESTONES catalogue in src/lib/post-order.ts. Adding a milestone is one
+// edit there — header dropdown, prev/next cards, and the rows below all
+// update together.
+const allPhases = milestonesByPhase();
+
+const statusStyle = (status: string) => {
+  if (status === 'shipped') return { dot: 'var(--accent)', label: 'Shipped' };
+  if (status === 'in-progress') return { dot: '#f59e0b', label: 'In progress' };
+  return { dot: 'var(--fg-subtle)', label: 'Planned' };
+};
+---
+
+<Base title="Terra Perceive · C++ perception for off-road autonomy" current="home">
+  <!-- Hero -->
+  <section class="mx-auto max-w-wide px-6 pt-20 sm:pt-28 pb-16">
+    <div class="max-w-3xl">
+      <div
+        class="inline-flex items-center gap-2 mb-6 text-xs uppercase tracking-[0.18em]"
+        style="color: var(--fg-muted);"
+      >
+        <span
+          class="inline-block w-1.5 h-1.5 rounded-full"
+          style="background: var(--accent);"
+        ></span>
+        Engineering blog
+      </div>
+      <h1
+        class="font-serif text-5xl sm:text-6xl font-medium tracking-tight text-balance mb-8"
+        style="color: var(--fg); line-height: 1.05;"
+      >
+        A production-grade C++ perception pipeline for construction site autonomy.
+      </h1>
+      <p
+        class="text-lg sm:text-xl text-pretty"
+        style="color: var(--fg-muted); line-height: 1.6;"
+      >
+        Autonomous perception often breaks when it leaves the asphalt. <strong style="color: var(--fg);">Terra Perceive</strong> is an engineering deep-dive into building a perception stack from the ground up to handle the unstructured frontier — sector RANSAC, LiDAR-inertial SLAM, multi-object tracking with cascades, probabilistic traversability, and control-barrier-function safety, all in C++17 on the RELLIS-3D dataset.
+      </p>
+    </div>
+
+    <!--
+      Hero clips — both from real RELLIS-3D off-road data (Ouster OS1-64 +
+      Basler RGB on a Warthog UGV). Left: M10's 3D chase-camera view of the
+      K=3/ε=0.7 tracker over the moving segment (frames 80–1100). Right: M9's
+      four-panel pose-source comparison over all 2,847 frames. Left is MP4
+      (autoplay loop), right is GIF (no MP4 alternative available).
+    -->
+    <div class="mt-14 grid grid-cols-1 md:grid-cols-2 gap-4">
+      <figure
+        class="rounded-lg overflow-hidden"
+        style="background: var(--bg-elev); border: 1px solid var(--border);"
+      >
+        <video
+          src={withBase('/assets/m10/open3d_chase_k3_eps07_moving.mp4')}
+          autoplay
+          muted
+          loop
+          playsinline
+          preload="metadata"
+          class="w-full h-auto block"
+          aria-label="3D point cloud render of the K=3, eps=0.7 SORT tracker on RELLIS-3D, frames 80 to 1100. The ego vehicle drives forward through forest; chase camera sits 50 m ahead and 12 m above, looking back at the scan. Points coloured by height; tracked clusters coloured by track ID. New tree clusters stream into the field of view from the front as the vehicle moves through them."
+        ></video>
+        <figcaption
+          class="text-xs px-4 py-3"
+          style="color: var(--fg-muted); border-top: 1px solid var(--border);"
+        >
+          <strong style="color: var(--fg);">M10 — 3D LiDAR chase-camera view of the from-scratch SORT tracker.</strong> Ego drives forward through forest (frames 80–1100); chase camera 50 m ahead at 12 m altitude. Points coloured by height, tracked clusters by stable track ID.
+        </figcaption>
+      </figure>
+      <figure
+        class="rounded-lg overflow-hidden"
+        style="background: var(--bg-elev); border: 1px solid var(--border);"
+      >
+        <img
+          src={withBase('/assets/m3/ablation_a_animation.gif')}
+          alt="Four-panel animation growing in lockstep over 2,847 frames of RELLIS sequence 00, one panel per pose source: from-scratch SLAM (manifold), Cartographer, KISS-ICP, and GPS-only. All four panels share the same world bounding box so positions are directly comparable. Trajectories diverge over time: SLAM and Cartographer track the same shape closely, ICP drifts at the tail, GPS jitters across more cells than the other three."
+          loading="lazy"
+          class="w-full h-auto block"
+        />
+        <figcaption
+          class="text-xs px-4 py-3"
+          style="color: var(--fg-muted); border-top: 1px solid var(--border);"
+        >
+          <strong style="color: var(--fg);">M9 — four pose sources accumulating BEV maps side-by-side.</strong> From-scratch SLAM, Cartographer, KISS-ICP, GPS-only — same world bbox, all 2,847 frames. SLAM and Cartographer track each other closely; ICP drifts at the tail; GPS smears.
+        </figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- Project meta strip -->
+  <section class="mx-auto max-w-wide px-6 py-10" style="border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);">
+    <dl class="grid grid-cols-2 sm:grid-cols-4 gap-8 text-sm">
+      <div>
+        <dt class="uppercase tracking-wider text-xs mb-1" style="color: var(--fg-subtle);">Language</dt>
+        <dd style="color: var(--fg);">C++17 · Python</dd>
+      </div>
+      <div>
+        <dt class="uppercase tracking-wider text-xs mb-1" style="color: var(--fg-subtle);">Dataset</dt>
+        <dd style="color: var(--fg);">RELLIS-3D · Ouster OS1-64</dd>
+      </div>
+      <div>
+        <dt class="uppercase tracking-wider text-xs mb-1" style="color: var(--fg-subtle);">Tests</dt>
+        <dd style="color: var(--fg);">162 C++ · 31 Python</dd>
+      </div>
+      <div>
+        <dt class="uppercase tracking-wider text-xs mb-1" style="color: var(--fg-subtle);">Repro</dt>
+        <dd style="color: var(--fg);">Docker · ~45 s</dd>
+      </div>
+    </dl>
+  </section>
+
+  <!-- Milestone phases -->
+  <section class="mx-auto max-w-wide px-6 py-20">
+    {allPhases.map((phase) => (
+      <div class="mb-16">
+        <h2
+          class="font-serif text-2xl font-medium tracking-tight mb-8"
+          style="color: var(--fg);"
+        >
+          {phase.heading}
+        </h2>
+        <ul class="space-y-1">
+          {phase.rows.map((row) => {
+            const s = statusStyle(row.status);
+            // Only shipped milestones are clickable — in-progress and planned
+            // entries are listed for context but don't link anywhere yet.
+            const href = row.status === 'shipped' ? withBase(`/${row.slug}`) : undefined;
+            const inner = (
+              <div
+                class="group grid grid-cols-[5rem_1fr_auto] gap-6 items-baseline py-5"
+                style="border-top: 1px solid var(--border);"
+              >
+                <div
+                  class="font-mono text-sm tabular-nums"
+                  style="color: var(--fg-subtle);"
+                >
+                  {row.id}
+                </div>
+                <div>
+                  <div class="font-medium text-lg mb-1" style="color: var(--fg);">
+                    {row.title}
+                  </div>
+                  <div class="text-sm text-pretty" style="color: var(--fg-muted); line-height: 1.55;">
+                    {row.blurb}
+                  </div>
+                </div>
+                <div
+                  class="inline-flex items-center gap-2 text-xs uppercase tracking-wider whitespace-nowrap"
+                  style="color: var(--fg-muted);"
+                >
+                  <span
+                    class="inline-block w-1.5 h-1.5 rounded-full"
+                    style={`background: ${s.dot};`}
+                  ></span>
+                  {s.label}
+                </div>
+              </div>
+            );
+            return href ? (
+              <li>
+                <a
+                  href={href}
+                  class="block transition-opacity hover:opacity-80"
+                >
+                  {inner}
+                </a>
+              </li>
+            ) : (
+              <li>{inner}</li>
+            );
+          })}
+        </ul>
+      </div>
+    ))}
+  </section>
+
+  <!-- Stack / author -->
+  <section class="mx-auto max-w-wide px-6 py-20" style="border-top: 1px solid var(--border);">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-12">
+      <div>
+        <h3 class="font-serif text-xl font-medium mb-4" style="color: var(--fg);">Technical stack</h3>
+        <ul class="space-y-2 text-sm" style="color: var(--fg-muted);">
+          <li><span style="color: var(--fg);">Core logic.</span> C++17, Eigen3 — no high-level CV libraries</li>
+          <li><span style="color: var(--fg);">Infrastructure.</span> ROS 2 Humble, Colcon, CMake</li>
+          <li><span style="color: var(--fg);">Data.</span> RELLIS-3D (Ouster OS1-64)</li>
+          <li><span style="color: var(--fg);">Deployment.</span> Docker, Ubuntu 22.04</li>
+        </ul>
+      </div>
+      <div>
+        <h3 class="font-serif text-xl font-medium mb-4" style="color: var(--fg);">About</h3>
+        <p class="text-sm text-pretty" style="color: var(--fg-muted); line-height: 1.65;">
+          <span style="color: var(--fg);">Terra Perceive</span> is a C++17 perception stack for off-road robotics, built from first principles on RELLIS-3D. The thirteen milestones cover the full pipeline — from LiDAR ingestion and sector RANSAC, through pose-graph SLAM (0.577&nbsp;m ATE on Sequence 00) and a SORT+IMM tracker cascade, to probabilistic traversability and 1D CBF safety with formal guarantees. 162 C++ + 31 Python tests, Docker-reproducible in 45&nbsp;seconds.
+        </p>
+      </div>
+    </div>
+  </section>
+</Base>

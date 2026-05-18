@@ -1,0 +1,82 @@
+---
+import '~/styles/global.css';
+import 'katex/dist/katex.min.css';
+import Header from '~/components/Header.astro';
+
+interface Props {
+  title: string;
+  description?: string;
+  current?: string;
+  currentSlug?: string;
+}
+
+const { title, description, current, currentSlug } = Astro.props;
+const siteDescription =
+  description ??
+  'A production-grade C++ perception pipeline for construction site autonomy — sector RANSAC, LiDAR-inertial SLAM, multi-object tracking, probabilistic traversability, and CBF safety, built from scratch on RELLIS-3D.';
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="generator" content={Astro.generator} />
+    <title>{title}</title>
+    <meta name="description" content={siteDescription} />
+
+    <!-- Set theme before paint to avoid flash.
+         Default is light. User can flip via the header toggle; choice
+         persists in localStorage and survives subsequent visits. We do not
+         auto-follow OS preference — light reads better for the long-form
+         math/figure-heavy content and a recruiter's first impression is
+         consistent across devices. -->
+    <script is:inline>
+      (function () {
+        const stored = localStorage.getItem('theme');
+        const theme = stored || 'light';
+        document.documentElement.setAttribute('data-theme', theme);
+      })();
+    </script>
+
+    <!-- Fonts: preconnect + load Inter, Newsreader, JetBrains Mono. -->
+    <link rel="preconnect" href="https://rsms.me/" />
+    <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=JetBrains+Mono:wght@400;500&display=swap"
+    />
+  </head>
+  <body class="min-h-screen flex flex-col">
+    <Header current={current} currentSlug={currentSlug} />
+    <main class="flex-1">
+      <slot />
+    </main>
+    <footer
+      class="mt-24 py-10 text-sm"
+      style="border-top: 1px solid var(--border); color: var(--fg-muted);"
+    >
+      <div class="mx-auto max-w-wide px-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <span>
+          &copy; 2026 Nishant Pushparaju &middot; NYU MS Mechatronics &amp; Robotics
+        </span>
+        <span class="flex gap-5">
+          <a
+            href="mailto:nishantpushparaju@gmail.com"
+            class="hover:underline"
+            style="color: var(--fg-muted);"
+          >Email</a>
+          <a
+            href="https://github.com/Nishant-ZFYII"
+            target="_blank"
+            rel="noopener"
+            class="hover:underline"
+            style="color: var(--fg-muted);"
+          >GitHub</a>
+        </span>
+      </div>
+    </footer>
+  </body>
+</html>

@@ -1,0 +1,74 @@
+# Build and deploy the Astro blog (web/) to GitHub Pages.
+#
+# Triggered:
+#   - on push to main when files under docs/, web/, or this workflow change
+#   - manually via the Actions tab (workflow_dispatch)
+#
+# The workflow does NOT trigger on changes to src/, include/, tests/, etc.
+# — those are unrelated to the blog and shouldn't kick off a Pages deploy.
+#
+# One-time setup required from the user:
+#   1. Repo → Settings → Pages → Source = "GitHub Actions"
+#   2. The Pages permission below grants the action enough to deploy
+
+name: Deploy blog to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'web/**'
+      - '.github/workflows/deploy-blog.yml'
+  workflow_dispatch:
+
+# Only one deploy at a time; cancel in-flight runs if a new push arrives.
+concurrency:
+  group: 'pages-deploy'
+  cancel-in-progress: false
+
+# Pages deployment needs id-token write for OIDC + pages write for upload.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build site
+        working-directory: web
+        # `npm run build` invokes the `prebuild` script which rebuilds the
+        # shadow docs (math syntax repair) before astro build runs.
+        run: npm run build
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

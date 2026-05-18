@@ -1,0 +1,22 @@
+---
+import { getCollection, render } from 'astro:content';
+import Post from '~/layouts/Post.astro';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('posts');
+  return posts
+    // Skip the home page itself (handled by index.astro)
+    .filter((p) => p.id !== 'index')
+    .map((entry) => ({
+      params: { slug: entry.id },
+      props: { entry },
+    }));
+}
+
+const { entry } = Astro.props;
+const { Content, headings } = await render(entry);
+---
+
+<Post entry={entry} headings={headings}>
+  <Content />
+</Post>

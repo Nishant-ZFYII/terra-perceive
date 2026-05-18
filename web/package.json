@@ -1,0 +1,28 @@
+{
+  "name": "terra-perceive-web",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "shadow-docs": "node scripts/build-shadow-docs.mjs",
+    "predev": "npm run shadow-docs",
+    "dev": "astro dev",
+    "start": "astro dev",
+    "prebuild": "npm run shadow-docs",
+    "build": "astro build",
+    "postbuild": "node scripts/prune-dist-assets.mjs",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "astro": "^5.0.0",
+    "@astrojs/mdx": "^4.0.0",
+    "@astrojs/sitemap": "^3.2.0",
+    "@astrojs/tailwind": "^5.1.0",
+    "tailwindcss": "^3.4.0",
+    "astro-expressive-code": "^0.40.0",
+    "rehype-katex": "^7.0.0",
+    "remark-math": "^6.0.0",
+    "katex": "^0.16.11"
+  }
+}

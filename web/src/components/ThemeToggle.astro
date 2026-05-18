@@ -1,0 +1,62 @@
+---
+// Theme toggle — three-state cycle: auto → light → dark → auto.
+// Initial state is set inline in <head> before paint to avoid FOUC.
+---
+
+<button
+  id="theme-toggle"
+  type="button"
+  aria-label="Toggle color theme"
+  class="inline-flex items-center justify-center w-9 h-9 rounded-md border transition-colors hover:bg-[var(--bg-elev)]"
+  style="border-color: var(--border); color: var(--fg-muted);"
+>
+  <!-- Sun (shown in light mode) -->
+  <svg class="theme-icon-light w-5 h-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="4"></circle>
+    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+  </svg>
+  <!-- Moon (shown in dark mode) -->
+  <svg class="theme-icon-dark w-5 h-5 hidden" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+  </svg>
+</button>
+
+<script is:inline>
+  // Default is light; user override persists in localStorage. The init
+  // also runs inline in <head> to set the attribute before first paint
+  // (avoids the flash). This block is here for re-entry on client nav.
+  (function () {
+    const stored = localStorage.getItem('theme');
+    const theme = stored || 'light';
+    document.documentElement.setAttribute('data-theme', theme);
+  })();
+
+  // Wire toggle once DOM is ready.
+  document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.getElementById('theme-toggle');
+    if (!btn) return;
+
+    function updateIcons() {
+      const theme = document.documentElement.getAttribute('data-theme');
+      const lightIcon = btn.querySelector('.theme-icon-light');
+      const darkIcon = btn.querySelector('.theme-icon-dark');
+      if (theme === 'dark') {
+        lightIcon.classList.add('hidden');
+        darkIcon.classList.remove('hidden');
+      } else {
+        darkIcon.classList.add('hidden');
+        lightIcon.classList.remove('hidden');
+      }
+    }
+
+    updateIcons();
+
+    btn.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      updateIcons();
+    });
+  });
+</script>

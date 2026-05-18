@@ -1,0 +1,292 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ────────────────────────────────────────────────────────────────
+   Font loading — Inter + Newsreader + JetBrains Mono via Fontsource
+   would normally go here. For the dummy we link them in <head> so
+   you can see the intended type immediately without a build step.
+   ──────────────────────────────────────────────────────────────── */
+
+/* ────────────────────────────────────────────────────────────────
+   Color tokens — both modes designed first-class
+   ──────────────────────────────────────────────────────────────── */
+
+/* Heading family — swap this single var to test serif vs sans across the site. */
+:root {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-serif: 'Newsreader', ui-serif, Georgia, serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  /* Toggle heading style by changing this one line: var(--font-sans) or var(--font-serif) */
+  --heading-font: var(--font-serif);
+  --heading-weight: 500;
+  --heading-letter-spacing: -0.01em;
+}
+
+:root,
+[data-theme='light'] {
+  --bg: #fbfaf7;
+  --bg-elev: #f4f2ee;
+  --fg: #1a1a1a;
+  --fg-muted: #6b7280;
+  --fg-subtle: #9ca3af;
+  --border: #e7e5e0;
+  --border-strong: #d4d2cd;
+  --accent: #0d9488;
+  --accent-hover: #0f766e;
+  --link: #0d9488;
+  --code-bg: #f4f2ee;
+  --selection: rgba(13, 148, 136, 0.18);
+}
+
+[data-theme='dark'] {
+  --bg: #0a0a0b;
+  --bg-elev: #16161a;
+  --fg: #e8e8ea;
+  --fg-muted: #9ca3af;
+  --fg-subtle: #6b7280;
+  --border: #27272a;
+  --border-strong: #3f3f46;
+  --accent: #2dd4bf;
+  --accent-hover: #5eead4;
+  --link: #2dd4bf;
+  --code-bg: #16161a;
+  --selection: rgba(45, 212, 191, 0.22);
+}
+
+/* Prevent FOUC before theme script runs */
+html {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+html,
+body {
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  font-feature-settings: 'cv11', 'ss01', 'ss03';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--bg);
+  color: var(--fg);
+  transition: background-color 200ms ease, color 200ms ease;
+}
+
+::selection {
+  background: var(--selection);
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Prose — long-form post typography
+   ──────────────────────────────────────────────────────────────── */
+
+.prose {
+  font-size: 1.125rem;
+  line-height: 1.6;
+  color: var(--fg);
+}
+
+.prose > * + * {
+  margin-top: 1.25em;
+}
+
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4 {
+  font-family: var(--heading-font);
+  font-weight: var(--heading-weight);
+  letter-spacing: var(--heading-letter-spacing);
+  color: var(--fg);
+  margin-top: 2.25em;
+  margin-bottom: 0.5em;
+  line-height: 1.2;
+  scroll-margin-top: 5rem;
+}
+
+/* Tailwind's `font-serif` utility, retargeted to the design token.
+   Switch the --heading-font variable above to flip serif/sans globally. */
+.font-serif {
+  font-family: var(--heading-font) !important;
+  font-weight: var(--heading-weight);
+  letter-spacing: var(--heading-letter-spacing);
+}
+
+.prose h1 { font-size: 2.25rem; margin-top: 0; }
+.prose h2 { font-size: 1.75rem; }
+.prose h3 { font-size: 1.375rem; }
+.prose h4 { font-size: 1.125rem; }
+
+.prose p {
+  color: var(--fg);
+}
+
+.prose a {
+  color: var(--link);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--link) 30%, transparent);
+  transition: border-color 150ms ease;
+}
+
+.prose a:hover {
+  border-bottom-color: var(--link);
+}
+
+.prose strong {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.prose em {
+  font-style: italic;
+}
+
+.prose code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.875em;
+  padding: 0.125em 0.375em;
+  border-radius: 0.25em;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+}
+
+.prose pre {
+  margin: 1.75em 0;
+}
+
+.prose pre code {
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.prose blockquote {
+  border-left: 3px solid var(--accent);
+  padding-left: 1.25em;
+  font-style: italic;
+  color: var(--fg-muted);
+  margin: 1.5em 0;
+}
+
+.prose ul,
+.prose ol {
+  padding-left: 1.5em;
+}
+
+.prose ul {
+  list-style: disc;
+}
+
+.prose ol {
+  list-style: decimal;
+}
+
+.prose li {
+  margin-top: 0.5em;
+}
+
+.prose hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 3em auto;
+  width: 8rem;
+}
+
+.prose table {
+  width: 100%;
+  font-size: 0.95rem;
+  border-collapse: collapse;
+  margin: 1.75em 0;
+}
+
+.prose th,
+.prose td {
+  text-align: left;
+  padding: 0.75em 1em;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.prose th {
+  font-weight: 600;
+  color: var(--fg);
+  border-bottom: 2px solid var(--border-strong);
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Figures — the alt-text-as-caption pattern, now visible
+   ──────────────────────────────────────────────────────────────── */
+
+.prose img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 0.5rem;
+  margin: 0 auto;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+}
+
+/* Borderless treatment for vector diagrams — they have their own whitespace
+   and a frame around them reads as decorative. Photos, GIFs and screenshots
+   keep the frame because their content extends to the image edge. */
+.prose img[data-ext='svg'] {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+
+.prose figure {
+  margin: 2.5em 0;
+}
+
+.prose figure img {
+  margin-bottom: 0.75em;
+}
+
+/* Broken-image fallback. When src 404s, the browser would otherwise show its
+   default broken-image glyph. This styles the alt-less img to render as a
+   small placeholder rather than a jarring scribble. */
+.prose figure img[alt='']:not([src]),
+.prose figure img[alt='']:-moz-broken {
+  min-height: 4rem;
+  background: var(--bg-elev);
+  position: relative;
+}
+
+.prose figcaption {
+  font-size: 0.875rem;
+  color: var(--fg-muted);
+  line-height: 1.55;
+  text-align: left;
+  padding: 0 0.25em;
+}
+
+/* Inline "Figure N." anchor — applied via the rehype-figure-captions plugin
+   when we move to P2. For now, figcaptions are clean italic-free text. */
+
+/* ────────────────────────────────────────────────────────────────
+   KaTeX math — keep colors theme-aware
+   ──────────────────────────────────────────────────────────────── */
+
+.katex {
+  color: var(--fg);
+  font-size: 1.05em;
+}
+
+.katex-display {
+  margin: 1.5em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Utilities
+   ──────────────────────────────────────────────────────────────── */
+
+.text-balance {
+  text-wrap: balance;
+}
+
+.text-pretty {
+  text-wrap: pretty;
+}

@@ -1,0 +1,109 @@
+---
+import ThemeToggle from './ThemeToggle.astro';
+import { POST_ORDER, POST_LABELS } from '~/lib/post-order';
+import { withBase } from '~/lib/url';
+const { current, currentSlug } = Astro.props as { current?: string; currentSlug?: string };
+---
+
+<header
+  class="sticky top-0 z-40 backdrop-blur-md"
+  style="background: color-mix(in srgb, var(--bg) 85%, transparent); border-bottom: 1px solid var(--border);"
+>
+  <div class="mx-auto max-w-wide px-6 h-14 flex items-center justify-between">
+    <a href={withBase('/')} class="flex items-center gap-2 font-medium tracking-tight" style="color: var(--fg);">
+      <span
+        class="inline-block w-2 h-2 rounded-full"
+        style="background: var(--accent);"
+        aria-hidden="true"
+      ></span>
+      <span>Terra Perceive</span>
+    </a>
+
+    <nav class="flex items-center gap-6 text-sm">
+      <a
+        href={withBase('/')}
+        class="hidden sm:inline-block transition-colors hover:opacity-100"
+        style={`color: ${current === 'home' ? 'var(--fg)' : 'var(--fg-muted)'};`}
+      >
+        Overview
+      </a>
+
+      <!-- Posts dropdown: lets the reader jump from any post to any other
+           without bouncing back to the index. Uses <details>/<summary> for
+           CSS-only open/close behavior; the popup positions absolutely below. -->
+      <details
+        class="relative hidden sm:block"
+        data-posts-menu
+      >
+        <summary
+          class="list-none cursor-pointer transition-colors hover:opacity-100"
+          style={`color: ${current === 'post' ? 'var(--fg)' : 'var(--fg-muted)'};`}
+        >
+          Posts
+          <svg class="inline-block w-3 h-3 ml-0.5 -mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </summary>
+        <div
+          class="absolute right-0 mt-2 w-72 rounded-lg p-2 shadow-lg"
+          style="background: var(--bg); border: 1px solid var(--border); box-shadow: 0 10px 30px -10px rgba(0,0,0,0.15);"
+        >
+          <ul class="max-h-[28rem] overflow-y-auto" role="list">
+            {POST_ORDER.map((slug) => {
+              const label = POST_LABELS[slug];
+              const isCurrent = slug === currentSlug;
+              return (
+                <li>
+                  <a
+                    href={withBase(`/${slug}`)}
+                    class="block px-3 py-2 rounded-md text-sm transition-colors"
+                    style={isCurrent
+                      ? `color: var(--accent); background: var(--bg-elev); font-weight: 500;`
+                      : `color: var(--fg);`}
+                    onmouseover={isCurrent ? '' : 'this.style.background=\'var(--bg-elev)\''}
+                    onmouseout={isCurrent ? '' : 'this.style.background=\'transparent\''}
+                  >
+                    <span class="font-mono text-xs mr-2" style="color: var(--fg-subtle);">{label.id}</span>
+                    {label.title}
+                  </a>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      </details>
+
+      <a
+        href="https://github.com/Nishant-ZFYII/terra-perceive"
+        target="_blank"
+        rel="noopener"
+        class="hidden sm:inline-block transition-colors hover:opacity-100"
+        style="color: var(--fg-muted);"
+      >
+        GitHub
+      </a>
+      <ThemeToggle />
+    </nav>
+  </div>
+</header>
+
+<script>
+  // Close the posts dropdown when clicking outside it.
+  document.addEventListener('click', (e) => {
+    const menu = document.querySelector('[data-posts-menu]') as HTMLDetailsElement | null;
+    if (!menu || !menu.open) return;
+    if (!menu.contains(e.target as Node)) {
+      menu.open = false;
+    }
+  });
+  // Close on Escape.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const menu = document.querySelector('[data-posts-menu]') as HTMLDetailsElement | null;
+    if (menu && menu.open) menu.open = false;
+  });
+</script>
+
+<style>
+  /* Hide the default <details> marker triangle */
+  details[data-posts-menu] summary::-webkit-details-marker { display: none; }
+  details[data-posts-menu] summary { list-style: none; }
+</style>

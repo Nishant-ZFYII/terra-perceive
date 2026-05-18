@@ -1,0 +1,159 @@
+---
+import type { MarkdownHeading } from 'astro';
+
+interface Props {
+  headings: MarkdownHeading[];
+  /** Maximum heading depth to include in the ToC. Default 2 — H2 only.
+   *  H3 entries add clutter without proportional navigation value; readers
+   *  who need finer granularity scan the rendered headings in-content. */
+  maxDepth?: number;
+  /** Minimum heading depth to include. Default 2 (skip the post H1). */
+  minDepth?: number;
+}
+
+const { headings, maxDepth = 2, minDepth = 2 } = Astro.props;
+
+const items = headings.filter((h) => h.depth >= minDepth && h.depth <= maxDepth);
+---
+
+{items.length > 0 && (
+  <nav
+    aria-label="Table of contents"
+    class="toc text-sm"
+    data-toc
+  >
+    <div
+      class="uppercase tracking-[0.14em] text-[11px] mb-5 font-medium"
+      style="color: var(--fg-subtle);"
+    >
+      On this page
+    </div>
+    <ul class="toc-list" role="list">
+      {items.map((h) => (
+        <li>
+          <a
+            href={`#${h.slug}`}
+            data-toc-link={h.slug}
+            class="toc-link"
+            data-depth={h.depth}
+          >
+            {h.text}
+          </a>
+        </li>
+      ))}
+    </ul>
+  </nav>
+)}
+
+<style>
+  .toc-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .toc-link {
+    display: block;
+    color: var(--fg-muted);
+    font-size: 0.875rem;
+    line-height: 1.45;
+    padding: 0.4rem 0;
+    text-decoration: none;
+    transition: color 150ms ease;
+    /* Subtle dot accent — invisible until active, then teal */
+    position: relative;
+    padding-left: 0;
+  }
+  .toc-link:hover {
+    color: var(--fg);
+  }
+  .toc-link[data-active='true'] {
+    color: var(--accent);
+    font-weight: 500;
+  }
+</style>
+
+<script>
+  // Highlight the active heading as the reader scrolls.
+  // Uses IntersectionObserver to track which heading is currently nearest the
+  // top of the viewport.
+  document.addEventListener('DOMContentLoaded', () => {
+    const toc = document.querySelector('[data-toc]');
+    if (!toc) return;
+
+    const links = Array.from(
+      toc.querySelectorAll<HTMLAnchorElement>('[data-toc-link]')
+    );
+    if (links.length === 0) return;
+
+    // Map slug -> link element for fast lookup.
+    const linkBySlug = new Map<string, HTMLAnchorElement>();
+    for (const link of links) {
+      const slug = link.dataset.tocLink;
+      if (slug) linkBySlug.set(slug, link);
+    }
+
+    // Find all heading elements the ToC points at.
+    const headings = links
+      .map((l) => document.getElementById(l.dataset.tocLink ?? ''))
+      .filter((h): h is HTMLElement => h !== null);
+
+    if (headings.length === 0) return;
+
+    // Track which headings are visible. We mark the highest-priority visible
+    // one as active (closest to the top of the viewport).
+    const visible = new Set<string>();
+
+    const setActive = (slug: string | null) => {
+      for (const link of links) {
+        if (link.dataset.tocLink === slug) {
+          link.setAttribute('data-active', 'true');
+        } else {
+          link.removeAttribute('data-active');
+        }
+      }
+    };
+
+    const updateActive = () => {
+      if (visible.size === 0) {
+        // Nothing visible — keep whatever was last active.
+        return;
+      }
+      // Pick the heading with the smallest top offset that's still on screen.
+      let bestSlug: string | null = null;
+      let bestTop = Infinity;
+      for (const h of headings) {
+        if (!visible.has(h.id)) continue;
+        const top = h.getBoundingClientRect().top;
+        if (top < bestTop) {
+          bestTop = top;
+          bestSlug = h.id;
+        }
+      }
+      setActive(bestSlug);
+    };
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            visible.add(entry.target.id);
+          } else {
+            visible.delete(entry.target.id);
+          }
+        }
+        updateActive();
+      },
+      // Treat a heading as "in view" once it's within the top 70% of the
+      // viewport. The negative bottom margin biases activation toward
+      // headings near the top.
+      { rootMargin: '0% 0% -70% 0%', threshold: [0, 1] }
+    );
+
+    for (const h of headings) observer.observe(h);
+
+    // Activate the first heading on load if user is at the top.
+    if (window.scrollY < 200) {
+      setActive(headings[0].id);
+    }
+  });
+</script>

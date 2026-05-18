@@ -1,0 +1,152 @@
+---
+import Base from './Base.astro';
+import TableOfContents from '~/components/TableOfContents.astro';
+import PostNav from '~/components/PostNav.astro';
+import { withBase } from '~/lib/url';
+import type { CollectionEntry } from 'astro:content';
+import type { MarkdownHeading } from 'astro';
+
+interface Props {
+  entry: CollectionEntry<'posts'>;
+  headings: MarkdownHeading[];
+  readingTime?: number;
+}
+
+const { entry, headings, readingTime } = Astro.props;
+const { data, body } = entry;
+
+const wordCount = body ? body.trim().split(/\s+/).length : 0;
+const minutes = readingTime ?? Math.max(1, Math.round(wordCount / 220));
+
+// Long-post threshold (per UX research): 2000+ words, or 5+ H2 sections.
+// Long posts get the sticky right-rail ToC on wide screens.
+// We pass H2-only into the ToC (maxDepth=2 default) to keep the rail
+// scannable on posts like M10 that have many H3 sub-headings.
+const h2Count = headings.filter((h) => h.depth === 2).length;
+const isLongPost = wordCount >= 2000 || h2Count >= 5;
+
+const displayDate = data.date
+  ? new Date(data.date).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    })
+  : null;
+---
+
+<Base title={`${data.title ?? entry.id} · Terra Perceive`} description={data.description} current="post" currentSlug={entry.id}>
+  <!--
+    Single container at max-w-wide (1024px). Content centers inside via
+    article.mx-auto.max-w-prose. The fixed-position ToC (see <aside> below)
+    sits independent of this container at the viewport right edge on screens
+    ≥1400px, so it doesn't influence content centering.
+  -->
+  <div class="mx-auto max-w-wide px-6 pt-16 pb-24">
+    <!--
+      Mobile / mid-width collapsible ToC, rendered above the post header.
+      Shown below 1400px viewport — at that width, a fixed right-edge ToC
+      would only leave ~50px between content and rail (cramped). Above
+      1400px the fixed ToC takes over via the <aside> below.
+    -->
+    {isLongPost && (
+      <details
+        class="min-[1400px]:hidden mb-10 rounded-lg p-4"
+        style="border: 1px solid var(--border); background: var(--bg-elev);"
+      >
+        <summary
+          class="cursor-pointer font-medium text-sm select-none"
+          style="color: var(--fg);"
+        >
+          On this page
+        </summary>
+        <div class="mt-4">
+          <TableOfContents headings={headings} />
+        </div>
+      </details>
+    )}
+
+    <!--
+      Content is truly viewport-centered (mx-auto max-w-prose). The right-rail
+      ToC is detached from the document flow via position:fixed so it sits at
+      the screen corner without pulling content off-center.
+    -->
+    <div>
+      <article class="mx-auto max-w-prose">
+        <!-- Post header -->
+        <header class="mb-12">
+          <div
+            class="flex items-center gap-3 mb-6 text-sm flex-wrap"
+            style="color: var(--fg-muted);"
+          >
+            <span>Part of the Terra Perceive series</span>
+            {displayDate && (
+              <>
+                <span aria-hidden="true">·</span>
+                <time>{displayDate}</time>
+              </>
+            )}
+            <span aria-hidden="true">·</span>
+            <span>{minutes} min read</span>
+          </div>
+          <h1
+            class="font-serif text-4xl sm:text-5xl font-medium tracking-tight text-balance"
+            style="color: var(--fg); line-height: 1.15;"
+          >
+            {data.title}
+          </h1>
+        </header>
+
+        <!-- Rendered markdown body -->
+        <div class="prose">
+          <slot />
+        </div>
+
+        <!-- Prev/next milestone navigation -->
+        <PostNav slug={entry.id} />
+
+        <!-- Footer / back-to-index -->
+        <nav
+          class="mt-10 pt-6 flex items-center justify-between text-sm"
+          style="border-top: 1px solid var(--border);"
+        >
+          <a
+            href={withBase('/')}
+            class="inline-flex items-center gap-2 transition-opacity hover:opacity-70"
+            style="color: var(--fg-muted);"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+            Back to index
+          </a>
+          <a
+            href={`https://github.com/Nishant-ZFYII/terra-perceive/blob/main/docs/${entry.id}.md`}
+            target="_blank"
+            rel="noopener"
+            class="inline-flex items-center gap-2 transition-opacity hover:opacity-70"
+            style="color: var(--fg-muted);"
+          >
+            Edit on GitHub
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M7 7h10v10"/></svg>
+          </a>
+        </nav>
+      </article>
+
+    </div>
+
+    <!--
+      Fixed-position ToC at viewport right edge. Only shown on xl+ (1280px)
+      where there's enough horizontal space to coexist with centered max-w-prose
+      content without overlapping. Below xl, the collapsible <details> above
+      handles navigation. Thin left border provides visual separation from prose
+      that the eye sweeps toward.
+    -->
+    {isLongPost && (
+      <aside
+        class="hidden min-[1400px]:block fixed w-56 overflow-y-auto pl-6"
+        style="top: 5rem; bottom: 4rem; right: 2rem; border-left: 1px solid var(--border);"
+        aria-label="On this page"
+      >
+        <TableOfContents headings={headings} />
+      </aside>
+    )}
+  </div>
+</Base>

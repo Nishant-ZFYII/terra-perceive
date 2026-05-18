@@ -1,0 +1,64 @@
+---
+import { getNeighbors, POST_LABELS } from '~/lib/post-order';
+import { withBase } from '~/lib/url';
+
+interface Props {
+  slug: string;
+}
+
+const { slug } = Astro.props;
+const { prev, next } = getNeighbors(slug);
+
+const prevLabel = prev ? POST_LABELS[prev] : null;
+const nextLabel = next ? POST_LABELS[next] : null;
+---
+
+{(prev || next) && (
+  <nav
+    class="mt-16 pt-10 grid grid-cols-1 sm:grid-cols-2 gap-4"
+    style="border-top: 1px solid var(--border);"
+    aria-label="Milestone navigation"
+  >
+    {prev && prevLabel ? (
+      <a
+        href={withBase(`/${prev}`)}
+        class="group block p-5 rounded-lg transition-colors"
+        style="border: 1px solid var(--border); background: var(--bg);"
+        onmouseover="this.style.background='var(--bg-elev)'"
+        onmouseout="this.style.background='var(--bg)'"
+      >
+        <div
+          class="flex items-center gap-1.5 text-xs uppercase tracking-wider mb-2"
+          style="color: var(--fg-subtle);"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+          Previous · {prevLabel.id}
+        </div>
+        <div class="font-medium" style="color: var(--fg);">{prevLabel.title}</div>
+      </a>
+    ) : (
+      <div></div>
+    )}
+
+    {next && nextLabel ? (
+      <a
+        href={withBase(`/${next}`)}
+        class="group block p-5 rounded-lg transition-colors text-right"
+        style="border: 1px solid var(--border); background: var(--bg);"
+        onmouseover="this.style.background='var(--bg-elev)'"
+        onmouseout="this.style.background='var(--bg)'"
+      >
+        <div
+          class="flex items-center justify-end gap-1.5 text-xs uppercase tracking-wider mb-2"
+          style="color: var(--fg-subtle);"
+        >
+          Next · {nextLabel.id}
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </div>
+        <div class="font-medium" style="color: var(--fg);">{nextLabel.title}</div>
+      </a>
+    ) : (
+      <div></div>
+    )}
+  </nav>
+)}
